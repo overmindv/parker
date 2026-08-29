@@ -1,0 +1,20 @@
+# Локальный бинарный каталог инструментов
+bin/
+
+# Среды/секреты
+.env
+.env.*
+!.env.example
+
+# Редакторы/ОС
+.idea/
+.vscode/
+.DS_Store
+
+# Артефакты тестов и сборки
+*.test
+*.out
+coverage.*
+
+# CodeGraph (индекс)
+.codegraph/

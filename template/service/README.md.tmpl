@@ -1,0 +1,29 @@
+# {{.ServiceName}}
+
+Сервис платформы Overmindv на каркасе [parker](https://github.com/overmindv/parker).
+Вся инфраструктура (конфиг, HTTP, /health /ready /metrics, postgres+миграции, kafka+outbox,
+логирование, graceful shutdown) — из parker; в этом репозитории только бизнес-логика.
+
+## Быстрый старт
+
+```bash
+cp .env.example .env
+make dev          # миграции + запуск (нужна доступная PostgreSQL)
+```
+
+Проверка: `GET /health` (liveness), `GET /ready` (готовность), `GET /metrics` (prometheus).
+
+## Команды
+
+```bash
+make run / build / test / lint / tidy
+make migrate-up / migrate-down      # миграции через parker
+```
+
+## Структура
+
+```
+cmd/{{.ServiceName}}/main.go     — паркдер: parker.Main(run, ...); здесь только роуты/чекки/воркеры
+internal/{{.ServiceName}}/       — бизнес-логика (domain, usecase, repository, transport)
+migrations/                      — SQL-миграции (append-only)
+```
