@@ -1,0 +1,44 @@
+# Пример Prometheus-алертов для сервиса на parker.
+# Реальные алерты заводятся в системе алертинга платформы, когда она появится;
+# здесь — каноничные правила, которые достаточно перенести (заменив <service>).
+groups:
+  - name: parker-<service>-availability
+    rules:
+      # Сервис не готов (зависимости недоступны) более 5 минут.
+      - alert: ServiceNotReady
+        expr: parker_ready{service="<service>"} == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Сервис <service> не готов (readiness упал)"
+
+      # Доля 5xx ответов высокая на одном из роутов.
+      - alert: HighErrorRate
+        expr: |
+          sum(rate(parker_http_requests_total{service="<service>",status=~"5.."}[5m]))
+          /
+          max(1, sum(rate(parker_http_requests_total{service="<service>"}[5m]))) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Ошибки 5xx сервиса <service> превышают 5%"
+
+  - name: parker-<service>-latency
+    rules:
+      # p95 latency выше порога (замените порог под свой сервис).
+      - alert: HighLatency
+        expr: |
+          histogram_quantile(0.95,
+            sum(rate(parker_http_request_duration_seconds_bucket{service="<service>"}[5m])) by (le))
+          > 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "p95 latency сервиса <service> выше 1s"
+
+  # TODO(outbox): при появлении метрики публикаций outbox добавить алерт
+  # "OutboxStuck" (нет публикаций за N минут) по
+  #   rate(parker_outbox_published_total{service="<service>"}[5m]).

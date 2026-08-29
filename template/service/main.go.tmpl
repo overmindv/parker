@@ -1,0 +1,38 @@
+package main
+
+import (
+	"net/http"
+
+	"github.com/overmindv/parker"
+	{{- if .HasPG }}
+	"github.com/jackc/pgx/v5/pgxpool"
+	{{- end }}
+)
+
+func main() {
+	parker.Main(run, parker.WithAppName("{{.ServiceName}}"))
+}
+
+// run — единственное место, где живёт логика сервиса: регистрация роутов,
+// health-чекков и фоновых воркеров. Вся инфраструктура — внутри parker.
+func run(app *parker.App) error {
+	{{- if .HasPG }}
+	pg, err := app.Postgres() // пул + health-чек "postgres" в /ready автоматически
+	if err != nil {
+		return err
+	}
+	repo := newRepository(pg)
+	_ = repo
+	{{- end }}
+
+	app.HTTP().HandleFunc("GET /ping", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("pong: {{.ServiceName}}"))
+	})
+	return nil
+}
+
+{{- if .HasPG }}
+
+// newRepository — пример использования пула; замените на ваш persistence-адаптер.
+func newRepository(_ *pgxpool.Pool) struct{} { return struct{}{} }
+{{- end }}
