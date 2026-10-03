@@ -1,0 +1,21 @@
+# Единый базовый конфиг golangci-lint для Go-сервисов Overmindv.
+# Task-hunter осознанно расширяет его (misspell/unconvert/prealloc/revive + исключения
+# для сгенерированного jet-кода) — см. task-hunter/.golangci.yml.
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  default: none
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
