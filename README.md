@@ -75,5 +75,6 @@ func run(app *parker.App) error {
 
 Только открытые библиотеки; ядро — std `net/http` (Go 1.22 method-паттерны) и `log/slog`.
 Единый бинарник `parker` (`serve` по умолчанию, `migrate`, `init`, `version`).
-Сервисы подключают parker через `replace => ../parker` локально; в Docker-сборке `replace`
-снимается (parke подтягивается по тегу). Подробнее — в `CLAUDE.md` и `AGENTS.md`.
+Сервисы подключают parker как `require github.com/overmindv/parker` по тегу (сейчас
+`v0.1.0`); `replace => ../parker` — только временный локальный dev-приём, в репозиториях
+не используется. Подробнее — в `CLAUDE.md` и `AGENTS.md`.
