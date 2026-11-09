@@ -26,19 +26,15 @@ func TestGenerateService_Builds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	svcDir := filepath.Join(temp, "server")
 	outRoot := filepath.Join(temp, "root")
+	svcDir := filepath.Join(outRoot, "embedded-demo")
 	if err := os.MkdirAll(outRoot, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Symlink(parkerDir, filepath.Join(outRoot, "parker")); err != nil {
 		t.Fatal(err)
 	}
-	if err := GenerateService(filepath.Join(outRoot, "embedded-demo"), "embedded-demo", false, false); err != nil {
-		t.Fatal(err)
-	}
-	// Перемещаем сгенерированный сервис как sibling ../parker.
-	if err := os.Rename(filepath.Join(outRoot, "embedded-demo"), svcDir); err != nil {
+	if err := GenerateService(svcDir, "embedded-demo", false, false); err != nil {
 		t.Fatal(err)
 	}
 

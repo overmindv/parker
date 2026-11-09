@@ -31,7 +31,7 @@ func columnExists(t *testing.T, dsn, table, column string) bool {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	var n int
 	err = db.QueryRow(
 		`SELECT count(*) FROM information_schema.columns WHERE table_name=$1 AND column_name=$2`,
@@ -47,9 +47,9 @@ func TestRunMigrate_UpStatus(t *testing.T) {
 	dsn := testDSN(t)
 	dir := t.TempDir()
 	writeMigration(t, dir, "0001_init.sql",
-		"CREATE TABLE parker_migrate_a (id int PRIMARY KEY);")
+		"-- +goose Up\nCREATE TABLE parker_migrate_a (id int PRIMARY KEY);\n-- +goose Down\nDROP TABLE parker_migrate_a;\n")
 	writeMigration(t, dir, "0002_second.sql",
-		"ALTER TABLE parker_migrate_a ADD COLUMN name text;")
+		"-- +goose Up\nALTER TABLE parker_migrate_a ADD COLUMN name text;\n-- +goose Down\nALTER TABLE parker_migrate_a DROP COLUMN name;\n")
 
 	if err := RunMigrate(dir, dsn, "up"); err != nil {
 		t.Fatalf("up: %v", err)
@@ -71,10 +71,12 @@ func TestRunMigrate_UpStatus(t *testing.T) {
 		t.Fatal("после down колонка name не должна существовать")
 	}
 
-	db, _ := sql.Open("pgx", dsn)
-	defer db.Close()
-	if _, err := db.Exec("DROP TABLE IF EXISTS parker_migrate_a"); err != nil {
-		t.Fatal(err)
+	// Откатываем первую миграцию вместе с её версией, чтобы тест можно было повторить.
+	if err := RunMigrate(dir, dsn, "down"); err != nil {
+		t.Fatalf("down initial migration: %v", err)
+	}
+	if columnExists(t, dsn, "parker_migrate_a", "id") {
+		t.Fatal("после полного отката таблица не должна существовать")
 	}
 }
 
