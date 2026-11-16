@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"embed"
 	"fmt"
+	"go/format"
 	"io"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"text/template"
+	"time"
 )
 
 //go:embed template/service/*.tmpl
@@ -54,13 +56,14 @@ func GenerateService(dir, name string, hasPG, hasKafka bool) error {
 	}{
 		{"template/service/go.mod.tmpl", "go.mod", true},
 		{"template/service/main.go.tmpl", filepath.Join("cmd", name, "main.go"), true},
+		{"template/service/main_test.go.tmpl", filepath.Join("cmd", name, "main_test.go"), true},
 		{"template/service/Makefile.tmpl", "Makefile", true},
 		{"template/service/Dockerfile.tmpl", "Dockerfile", true},
 		{"template/service/env.example.tmpl", ".env.example", true},
 		{"template/service/gitignore.tmpl", ".gitignore", true},
 		{"template/service/ci.yml.tmpl", filepath.Join(".github", "workflows", "ci.yml"), true},
 		{"template/service/README.md.tmpl", "README.md", true},
-		{"template/service/migrations_0001_init.sql.tmpl", filepath.Join("migrations", "0001_init.sql"), hasPG},
+		{"template/service/migrations_0001_init.sql.tmpl", filepath.Join("migrations", time.Now().UTC().Format("20060102")+"0001_init.sql"), hasPG},
 	}
 	for _, f := range files {
 		if !f.cond {
@@ -92,7 +95,14 @@ func renderServiceFile(data serviceData, tmplPath, outPath string) error {
 	if err := os.MkdirAll(filepath.Dir(outPath), 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(outPath, buf.Bytes(), 0o644)
+	content := buf.Bytes()
+	if strings.HasSuffix(outPath, ".go") {
+		content, err = format.Source(content)
+		if err != nil {
+			return err
+		}
+	}
+	return os.WriteFile(outPath, content, 0o644)
 }
 
 // generateInternalSkeleton создаёт структуру каталогов бизнес-логики с подсказками.
@@ -122,29 +132,35 @@ func generateInternalSkeleton(dir, name string) error {
 // PrintComposeBlock печатает готовый блок docker-compose для вставки в infra.
 func PrintComposeBlock(w io.Writer, name string, hasPG, hasKafka bool) {
 	pf := func(format string, args ...any) { _, _ = fmt.Fprintf(w, format, args...) } // игнорируем ошибку записи
-	pf("# Вставьте в infra/docker-compose.yml и добавьте %s_POSTGRES_PASSWORD=__GENERATE__ в infra/.env.example\n", strings.ToUpper(name))
-	pf("  %s-postgres:\n", name)
-	pf("    image: postgres:17-alpine\n")
-	pf("    environment: { POSTGRES_DB: %s, POSTGRES_USER: %s, POSTGRES_PASSWORD: \"${%s_POSTGRES_PASSWORD:?set in .env}\" }\n", name, name, strings.ToUpper(name))
-	pf("    volumes: [ %s-postgres-data:/var/lib/postgresql/data ]\n", name)
-	pf("    healthcheck: { test: [\"CMD-SHELL\",\"pg_isready -U %s -d %s\"], interval: 5s, timeout: 3s, retries: 20 }\n\n", name, name)
+	if hasPG {
+		pf("# Вставьте в infra/docker-compose.yml и добавьте %s_POSTGRES_PASSWORD=__GENERATE__ в infra/.env.example\n", strings.ToUpper(name))
+		pf("  %s-postgres:\n", name)
+		pf("    image: postgres:17-alpine\n")
+		pf("    environment: { POSTGRES_DB: %s, POSTGRES_USER: %s, POSTGRES_PASSWORD: \"${%s_POSTGRES_PASSWORD:?set in .env}\" }\n", name, name, strings.ToUpper(name))
+		pf("    volumes: [ %s-postgres-data:/var/lib/postgresql/data ]\n", name)
+		pf("    healthcheck: { test: [\"CMD-SHELL\",\"pg_isready -U %s -d %s\"], interval: 5s, timeout: 3s, retries: 20 }\n\n", name, name)
 
-	pf("  %s-migrate:\n", name)
-	pf("    build: { context: ../%s, args: { GOPROXY: \"${GOPROXY:-https://proxy.golang.org,direct}\" } }\n", name)
-	pf("    entrypoint: [\"%s\", \"migrate\", \"--dir\", \"migrations\", \"up\"]\n", name)
-	pf("    environment:\n      DATABASE_URL: \"postgres://%s:${%s_POSTGRES_PASSWORD}@%s-postgres:5432/%s?sslmode=disable\"\n\n",
-		name, strings.ToUpper(name), name, name)
+		pf("  %s-migrate:\n", name)
+		pf("    build: { context: ../%s, args: { GOPROXY: \"${GOPROXY:-https://proxy.golang.org,direct}\" } }\n", name)
+		pf("    entrypoint: [\"%s\", \"migrate\", \"--dir\", \"migrations\", \"up\"]\n", name)
+		pf("    environment:\n      DATABASE_URL: \"postgres://%s:${%s_POSTGRES_PASSWORD}@%s-postgres:5432/%s?sslmode=disable\"\n\n",
+			name, strings.ToUpper(name), name, name)
 
+	}
 	pf("  %s:\n", name)
 	pf("    build: { context: ../%s, args: { GOPROXY: \"${GOPROXY:-https://proxy.golang.org,direct}\" } }\n", name)
 	pf("    environment:\n      SERVICE_NAME: %s\n      HTTP_ADDR: \":8080\"\n      ENV: local\n", name)
-	pf("      DATABASE_URL: \"postgres://%s:${%s_POSTGRES_PASSWORD}@%s-postgres:5432/%s?sslmode=disable\"\n",
-		name, strings.ToUpper(name), name, name)
+	if hasPG {
+		pf("      DATABASE_URL: \"postgres://%s:${%s_POSTGRES_PASSWORD}@%s-postgres:5432/%s?sslmode=disable\"\n",
+			name, strings.ToUpper(name), name, name)
+	}
 	if hasKafka {
 		pf("      KAFKA_BOOTSTRAP_SERVERS: \"kafka:9092\"\n")
 	}
-	pf("    depends_on:\n      %s-migrate: { condition: service_completed_successfully }\n", name)
-	pf("    healthcheck:\n      test: [\"CMD-SHELL\",\"wget -qO- http://127.0.0.1:8080/ready >/dev/null\"]\n      interval: 5s; timeout: 3s; retries: 20; start_period: 5s\n    restart: unless-stopped\n")
+	if hasPG {
+		pf("    depends_on:\n      %s-migrate: { condition: service_completed_successfully }\n", name)
+	}
+	pf("    healthcheck:\n      test: [\"CMD-SHELL\",\"wget -qO- http://127.0.0.1:8080/ready >/dev/null\"]\n      interval: 5s\n      timeout: 3s\n      retries: 20\n      start_period: 5s\n    restart: unless-stopped\n")
 }
 
 // PrintPostInitChecklist печатает чек-лист (Части 1–5) после создания сервиса.

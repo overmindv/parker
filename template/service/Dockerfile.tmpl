@@ -1,5 +1,5 @@
 # Многостадийная сборка. В контейнере нет соседнего ../parker: parker
-# подтягивается по тегу (replace снят), см. go.mod / go.sum.
+# подтягивается по тегу (без replace), см. go.mod / go.sum.
 FROM golang:1.26-alpine AS build
 
 ARG GOPROXY
@@ -18,7 +18,7 @@ RUN apk add --no-cache ca-certificates wget \
     && adduser -S {{.ServiceName}} -G {{.ServiceName}}
 WORKDIR /app
 COPY --from=build /out/{{.ServiceName}} /usr/local/bin/{{.ServiceName}}
-COPY migrations /app/migrations
+{{if .HasPG}}COPY migrations /app/migrations{{end}}
 USER {{.ServiceName}}
 EXPOSE 8080
 ENTRYPOINT ["{{.ServiceName}}"]

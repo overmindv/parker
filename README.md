@@ -22,7 +22,7 @@ PostgreSQL + миграции, Kafka + outbox, метрики, жизненны�
   успешной обработки), `OutboxDispatcher` + `PgOutbox` (атомарная публикация «БД + событие»).
 - ✅ **Фаза 5** — наблюдаемость: W3C `traceparent` → лог-поля `request_id/trace_id/span_id`,
   `App.LoggerFor(ctx)`, метрика `parker_ready`, ассеты `docs/dashboard.json` + `docs/alerts.example.yml`.
-- ✅ **Фаза 6** — CLI `parker init`: генерация каркаса сервиса (go.mod+replace, main.go, Makefile,
+- ✅ **Фаза 6** — CLI `parker init`: генерация каркаса сервиса (go.mod с опубликованным тегом, main.go, Makefile,
   Dockerfile, CI, migrations/, internal/), печать compose-блока и чек-листа. Проверено end-to-end:
   `parker init demo && go build && serve` → `/ping`, `/health`, `/ready`, `/metrics`.
 - ⏳ Фазы 7–8 — примерный сервис + интеграция в `infra`; полировка. См. план в [`docs/plan/`](docs/plan/).
@@ -30,8 +30,9 @@ PostgreSQL + миграции, Kafka + outbox, метрики, жизненны�
 ## Быстрый старт `parker init`
 
 ```bash
-# в пустом git-репозитории нового сервиса (соседнем с ../parker):
-../parker/bin/parker init myservice --pg [--kafka]
+# в пустом git-репозитории нового сервиса:
+parker init myservice --pg [--kafka]
+go mod tidy
 cp .env.example .env
 make dev
 # дальше — Части 2–5 (см. parker/docs/plan/08_service_bootstrap.md)
@@ -131,3 +132,15 @@ exhausted). Каждый цикл очищает до 100 sent старше 7 д
 не удаляются. Метод `CleanupSent` ограничен 1000 строк и retention не менее суток.
 При rollback exhausted сохраняются и требуют явного решения оператора; не переводить
 их автоматически в pending. Обновление закреплённых service dependencies — OVM-187.
+
+
+## Изолированный шаблон (OVM-186)
+
+`init` закрепляет опубликованный v0.1.0 без replace. Новый сервис собирается без
+соседнего Parker; локальная совместная разработка включается отдельным временным
+`go.work` (см. сгенерированный README). Migration получает дату UTC и номер 0001;
+последующие файлы append-only. `--no-pg` не создаёт миграций и не требует PostgreSQL
+в Makefile, Dockerfile и Compose-примере. Go-файлы форматируются перед записью.
+
+Проверка standalone: `go test -tags=component . -run TestGeneratedServiceBuildsWithoutSibling`.
+Тест создаёт оба варианта в temp directory и выполняет tidy/build/test с GOWORK=off.

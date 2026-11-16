@@ -7,8 +7,9 @@
 ## Быстрый старт
 
 ```bash
+go mod tidy
 cp .env.example .env
-make dev          # миграции + запуск (нужна доступная PostgreSQL)
+make dev          # {{if .HasPG}}миграции + запуск с PostgreSQL{{else}}запуск без PostgreSQL{{end}}
 ```
 
 Проверка: `GET /health` (liveness), `GET /ready` (готовность), `GET /metrics` (prometheus).
@@ -23,7 +24,20 @@ make migrate-up / migrate-down      # миграции через parker
 ## Структура
 
 ```
-cmd/{{.ServiceName}}/main.go     — паркдер: parker.Main(run, ...); здесь только роуты/чекки/воркеры
+cmd/{{.ServiceName}}/main.go     — каркас: parker.Main(run, ...); здесь только роуты/чекки/воркеры
 internal/{{.ServiceName}}/       — бизнес-логика (domain, usecase, repository, transport)
 migrations/                      — SQL-миграции (append-only)
 ```
+
+## Версия и локальная разработка
+
+Parker закреплён на опубликованном `v0.1.0`; соседний checkout не нужен. `go.sum`
+после `go mod tidy` следует закоммитить. Для opt-in разработки Parker используйте
+временный `go.work` в общем родительском каталоге:
+`go work init /path/to/service /path/to/parker`. Для другого расположения задайте
+`GOWORK=/absolute/path/go.work`.
+Не добавляйте локальный replace в release go.mod.
+
+Новые миграции называются `YYYYMMDDNNNN_description.sql`; применённые не изменяются.
+Проверка запущенного сервиса: `curl -f localhost:8080/health` и
+`curl -f localhost:8080/ready`. {{if .HasPG}}Readiness требует доступную БД.{{end}}

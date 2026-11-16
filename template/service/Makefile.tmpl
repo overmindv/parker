@@ -10,7 +10,7 @@ endif
 .PHONY: dev run build test lint tidy migrate-up migrate-down
 
 # dev — главный локальный таргет: миграции + запуск сервиса.
-dev: migrate-up run
+dev: {{if .HasPG}}migrate-up {{end}}run
 
 # run — запускает HTTP API {{.ServiceName}}.
 run:

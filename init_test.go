@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestValidateServiceName(t *testing.T) {
@@ -37,7 +38,7 @@ func TestGenerateService_WithPG(t *testing.T) {
 		".gitignore",
 		filepath.Join(".github", "workflows", "ci.yml"),
 		"README.md",
-		filepath.Join("migrations", "0001_init.sql"),
+		filepath.Join("migrations", time.Now().UTC().Format("20060102")+"0001_init.sql"),
 		filepath.Join("internal", "demo", "domain", "README.md"),
 		filepath.Join("internal", "demo", "usecase", "README.md"),
 		filepath.Join("internal", "demo", "repository", "README.md"),
@@ -57,8 +58,8 @@ func TestGenerateService_WithPG(t *testing.T) {
 	if !strings.Contains(gomodStr, "module github.com/overmindv/demo") {
 		t.Errorf("go.mod должен содержать module demo:\n%s", gomodStr)
 	}
-	if !strings.Contains(gomodStr, "replace github.com/overmindv/parker => ../parker") {
-		t.Errorf("go.mod должен содержать replace => ../parker:\n%s", gomodStr)
+	if strings.Contains(gomodStr, "replace ") {
+		t.Errorf("go.mod не должен требовать соседний checkout:\n%s", gomodStr)
 	}
 
 	main, err := os.ReadFile(filepath.Join(dir, "cmd", "demo", "main.go"))
@@ -105,5 +106,25 @@ func TestComposeBlockContainsService(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("compose-блок должен содержать %q", want)
 		}
+	}
+}
+
+func TestGeneratedModuleSnapshot(t *testing.T) {
+	dir := t.TempDir()
+	if err := GenerateService(dir, "sample", false, false); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "go.mod"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected := "module github.com/overmindv/sample\n\ngo 1.26\n\nrequire github.com/overmindv/parker v0.1.0\n"
+	if string(data) != expected {
+		t.Fatalf("module snapshot changed: %s", data)
+	}
+	var b strings.Builder
+	PrintComposeBlock(&b, "sample", false, false)
+	if strings.Contains(b.String(), "postgres") || strings.Contains(b.String(), "; timeout") {
+		t.Fatalf("invalid no-pg compose: %s", b.String())
 	}
 }

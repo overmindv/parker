@@ -1,0 +1,13 @@
+package main
+
+import (
+ "net/http"
+ "net/http/httptest"
+ "testing"
+)
+
+func TestPing(t *testing.T) {
+ w:=httptest.NewRecorder()
+ ping(w,httptest.NewRequest(http.MethodGet,"/ping",nil))
+ if w.Code!=http.StatusOK || w.Body.String()!="pong: {{.ServiceName}}" {t.Fatalf("unexpected ping: %d %s",w.Code,w.Body.String())}
+}
