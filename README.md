@@ -144,3 +144,32 @@ exhausted). Каждый цикл очищает до 100 sent старше 7 д
 
 Проверка standalone: `go test -tags=component . -run TestGeneratedServiceBuildsWithoutSibling`.
 Тест создаёт оба варианта в temp directory и выполняет tidy/build/test с GOWORK=off.
+
+## TLS и SASL Kafka (OVM-184)
+
+`NewProducer` и `NewSubscriber` принимают необязательный последний `KafkaSecurity`;
+прежние вызовы сохраняют local plaintext. Методы App используют одинаковые настройки
+Options/env и среду приложения. В production TLS обязателен; SASL без TLS запрещён
+во всех средах. InsecureSkipVerify не предоставляется: hostname и CA проверяются,
+минимальная версия TLS — 1.2. Системные CA используются по умолчанию, явный CA-файл
+заменяет trust roots. Для mTLS укажите парные client certificate/key.
+
+| Переменная | Значение |
+| --- | --- |
+| KAFKA_TLS_ENABLED | true/false, некорректное значение отвергается |
+| KAFKA_TLS_CA_FILE | PEM trust roots, необязательно |
+| KAFKA_TLS_CERT_FILE / KAFKA_TLS_KEY_FILE | Client certificate/key, только вместе |
+| KAFKA_TLS_SERVER_NAME | Ожидаемое DNS-имя сертификата; по умолчанию имя broker |
+| KAFKA_SASL_MECHANISM | PLAIN, SCRAM-SHA-256 или SCRAM-SHA-512 |
+| KAFKA_SASL_USERNAME / KAFKA_SASL_PASSWORD | Credentials, обязательны при SASL |
+
+Пароль читается без trim и не попадает в сообщения конфигурационных ошибок,
+String/slog-представление или JSON. Не логируйте Options/переменные окружения целиком.
+Credentials передаются через secret store окружения, сертификаты — mounted files.
+ACL задаются оператором на нужные topic/group; изменение ACL production не выполняется.
+
+`SDKROOT=... scripts/test-kafka-security.sh` (SDKROOT нужен только при локальном
+macOS SDK workaround) поднимает выделенный TLS/SCRAM broker с временными сертификатами,
+проверяет ограниченный topic/group и отказы password/trust/hostname, затем удаляет его.
+Для Linux/CI достаточно `scripts/test-kafka-security.sh`.
+Обновление сервисов и выпуск reliability tag остаются в OVM-187.

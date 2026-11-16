@@ -37,6 +37,10 @@ func Load() (Options, error) {
 	opts.DatabaseURL = strings.TrimSpace(os.Getenv("DATABASE_URL"))
 	opts.MigrationsDir = Env("MIGRATIONS_DIR", opts.MigrationsDir)
 	opts.KafkaBrokers = EnvList("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
+	opts.KafkaSecurity, err = loadKafkaSecurity(opts.Environment)
+	if err != nil {
+		return Options{}, err
+	}
 	opts.MetricsEnabled = EnvBool("METRICS_ENABLED", opts.MetricsEnabled)
 	opts.PprofEnabled = EnvBool("PPROF_ENABLED", opts.PprofEnabled)
 
@@ -83,7 +87,9 @@ func (o Options) Validate() error {
 		}
 	}
 
-	return nil
+	security := o.KafkaSecurity
+	security.Environment = o.Environment
+	return security.validate()
 }
 
 // validateDatabaseURL проверяет схему, host и имя PostgreSQL database.

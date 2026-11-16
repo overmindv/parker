@@ -25,7 +25,8 @@ type Options struct {
 	MigrationsDir string // MIGRATIONS_DIR
 
 	// Kafka.
-	KafkaBrokers []string // KAFKA_BOOTSTRAP_SERVERS
+	KafkaSecurity KafkaSecurity
+	KafkaBrokers  []string // KAFKA_BOOTSTRAP_SERVERS
 
 	// Observability.
 	MetricsEnabled bool // METRICS_ENABLED

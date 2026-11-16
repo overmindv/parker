@@ -16,11 +16,16 @@ type Producer struct {
 }
 
 // NewProducer создаёт producer к заданным брокерам.
-func NewProducer(brokers []string) (*Producer, error) {
+func NewProducer(brokers []string, security ...KafkaSecurity) (*Producer, error) {
 	if len(brokers) == 0 {
 		return nil, fmt.Errorf("не заданы kafka-брокеры")
 	}
-	client, err := kgo.NewClient(kgo.SeedBrokers(brokers...))
+	opts, err := kafkaSecurityOptions(security...)
+	if err != nil {
+		return nil, err
+	}
+	opts = append(opts, kgo.SeedBrokers(brokers...))
+	client, err := kgo.NewClient(opts...)
 	if err != nil {
 		return nil, fmt.Errorf("создать kafka producer: %w", err)
 	}
@@ -65,20 +70,25 @@ type Subscriber struct {
 }
 
 // NewSubscriber создаёт consumer-group подписчика.
-func NewSubscriber(brokers []string, group string, topics []string, handler Handler, log *slog.Logger) (*Subscriber, error) {
+func NewSubscriber(brokers []string, group string, topics []string, handler Handler, log *slog.Logger, security ...KafkaSecurity) (*Subscriber, error) {
 	if len(brokers) == 0 {
 		return nil, fmt.Errorf("не заданы kafka-брокеры")
 	}
 	if handler == nil {
 		return nil, fmt.Errorf("не задан handler подписчика")
 	}
-	client, err := kgo.NewClient(
+	opts, err := kafkaSecurityOptions(security...)
+	if err != nil {
+		return nil, err
+	}
+	opts = append(opts,
 		kgo.SeedBrokers(brokers...),
 		kgo.ConsumerGroup(group),
 		kgo.ConsumeTopics(topics...),
 		kgo.DisableAutoCommit(),
 		kgo.BlockRebalanceOnPoll(),
 	)
+	client, err := kgo.NewClient(opts...)
 	if err != nil {
 		return nil, fmt.Errorf("создать kafka consumer: %w", err)
 	}
@@ -158,7 +168,7 @@ func (s *Subscriber) Close() { s.client.Close() }
 
 // NewProducer создаёт producer из broker-ов Options приложения и регистрирует его очистку.
 func (a *App) NewProducer() (*Producer, error) {
-	p, err := NewProducer(a.opts.KafkaBrokers)
+	p, err := NewProducer(a.opts.KafkaBrokers, a.kafkaSecurity())
 	if err != nil {
 		return nil, err
 	}
@@ -168,10 +178,16 @@ func (a *App) NewProducer() (*Producer, error) {
 
 // NewSubscriber создаёт consumer-group подписчика из broker-ов Options и регистрирует очистку.
 func (a *App) NewSubscriber(group string, topics []string, handler Handler) (*Subscriber, error) {
-	s, err := NewSubscriber(a.opts.KafkaBrokers, group, topics, handler, a.log)
+	s, err := NewSubscriber(a.opts.KafkaBrokers, group, topics, handler, a.log, a.kafkaSecurity())
 	if err != nil {
 		return nil, err
 	}
 	a.trackCloser(s.Close)
 	return s, nil
+}
+
+func (a *App) kafkaSecurity() KafkaSecurity {
+	security := a.opts.KafkaSecurity
+	security.Environment = a.opts.Environment
+	return security
 }

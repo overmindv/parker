@@ -81,3 +81,13 @@ jobs:
         env:
           PARKER_TEST_KAFKA: 127.0.0.1:19092
         run: go test -race -tags=component . -run TestKafka -count=1
+
+  kafka-security-component:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Verify TLS and SCRAM with restricted credentials
+        run: scripts/test-kafka-security.sh
