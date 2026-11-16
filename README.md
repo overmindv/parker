@@ -181,3 +181,8 @@ macOS SDK workaround) поднимает выделенный TLS/SCRAM broker �
 Bootstrap template сохраняет v0.1.0; явный go get подключает release и проверяется
 `make release-check RELEASE_VERSION=v0.2.0`. Сервисы не обновляются автоматически:
 сначала owner migrations и TLS/ACL, затем согласованное переключение workers.
+
+При сбое только release automation разрешён `workflow_dispatch` с существующим
+immutable tag: workflow получает исходный tag object из origin, сверяет его commit
+с checkout и зелёным main CI, повторяет все gates. Тег и module contents не меняются.
+Изменение самой библиотеки после tag требует новой версии.

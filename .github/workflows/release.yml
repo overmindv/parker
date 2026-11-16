@@ -3,12 +3,18 @@ name: Parker Release
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Existing immutable release tag
+        required: true
+        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: parker-release-${{ github.ref }}
+  group: parker-release-${{ inputs.version || github.ref_name }}
   cancel-in-progress: false
 
 jobs:
@@ -31,11 +37,12 @@ jobs:
     env:
       PARKER_TEST_DSN: postgres://postgres:postgres@localhost:5432/parker_release?sslmode=disable
       PARKER_TEST_KAFKA: 127.0.0.1:19092
-      RELEASE_VERSION: ${{ github.ref_name }}
+      RELEASE_VERSION: ${{ inputs.version || github.ref_name }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: ${{ inputs.version || github.ref_name }}
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
@@ -46,7 +53,10 @@ jobs:
           [[ "$RELEASE_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
           test "$(go run ./cmd/parker version)" = "parker ${RELEASE_VERSION#v}"
           test -f "docs/releases/$RELEASE_VERSION.md"
-          test "$(git cat-file -t "refs/tags/$RELEASE_VERSION")" = tag
+          # Checkout может локально разыменовать annotated tag; читаем исходный remote object.
+          git fetch origin "refs/tags/$RELEASE_VERSION:refs/parker-release/$RELEASE_VERSION"
+          test "$(git cat-file -t "refs/parker-release/$RELEASE_VERSION")" = tag
+          test "$(git rev-parse "refs/parker-release/$RELEASE_VERSION^{commit}")" = "$(git rev-parse HEAD)"
           git merge-base --is-ancestor HEAD origin/main
           RELEASE_COMMIT=$(git rev-parse HEAD)
           SUCCESS_COUNT=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$RELEASE_COMMIT&event=push&status=success" --jq "[.workflow_runs[] | select(.head_sha == \"$RELEASE_COMMIT\" and .head_branch == \"main\" and .conclusion == \"success\")] | length")
