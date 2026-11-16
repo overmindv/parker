@@ -67,3 +67,17 @@ jobs:
           go-version-file: go.mod
       - name: Run component tests
         run: go test -race -tags=component ./...
+
+  kafka-component:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Start isolated broker
+        run: docker run -d --name kafka -p 19092:19092 redpandadata/redpanda:v24.3.18 redpanda start --overprovisioned --smp 1 --memory 512M --reserve-memory 0M --node-id 0 --check=false --kafka-addr 0.0.0.0:19092 --advertise-kafka-addr 127.0.0.1:19092
+      - name: Test consumer recovery
+        env:
+          PARKER_TEST_KAFKA: 127.0.0.1:19092
+        run: go test -race -tags=component . -run TestKafka -count=1

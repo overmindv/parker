@@ -50,8 +50,16 @@ type Handler func(ctx context.Context, key string, value []byte) error
 
 // Subscriber — consumer-group подписчик: читает топики, вызывает Handler.
 // Коммит offset'а выполняется после успешной обработки (at-least-once).
+type subscriberClient interface {
+	PollRecords(context.Context, int) kgo.Fetches
+	CommitRecords(context.Context, ...*kgo.Record) error
+	AllowRebalance()
+	Ping(context.Context) error
+	Close()
+}
+
 type Subscriber struct {
-	client  *kgo.Client
+	client  subscriberClient
 	log     *slog.Logger
 	handler Handler
 }
@@ -69,6 +77,7 @@ func NewSubscriber(brokers []string, group string, topics []string, handler Hand
 		kgo.ConsumerGroup(group),
 		kgo.ConsumeTopics(topics...),
 		kgo.DisableAutoCommit(),
+		kgo.BlockRebalanceOnPoll(),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("создать kafka consumer: %w", err)
@@ -79,31 +88,66 @@ func NewSubscriber(brokers []string, group string, topics []string, handler Hand
 // Run — цикл потребления; Runnable для Runner'а. Завершается по отмене ctx.
 func (s *Subscriber) Run(ctx context.Context) error {
 	for {
-		fetches := s.client.PollFetches(ctx)
+		fetches := s.client.PollRecords(ctx, 1)
+		if ctx.Err() != nil {
+			s.client.AllowRebalance()
+			return nil
+		}
+		if len(fetches.Errors()) > 0 {
+			s.client.AllowRebalance()
+			// Нельзя пропускать записи из частично успешного fetch: остановка даёт redelivery.
+			return fmt.Errorf("kafka poll failed")
+		}
+		err := s.processFetch(ctx, fetches)
+		s.client.AllowRebalance()
 		if ctx.Err() != nil {
 			return nil
 		}
-		if errs := fetches.Errors(); len(errs) > 0 {
-			s.log.Warn("kafka poll errors", "count", len(errs))
-			select {
-			case <-ctx.Done():
-				return nil
-			case <-time.After(time.Second):
-			}
-			continue
+		if err != nil {
+			return err
 		}
-
-		fetches.EachRecord(func(rec *kgo.Record) {
-			if err := s.handler(ctx, string(rec.Key), rec.Value); err != nil {
-				s.log.Error("kafka handler error",
-					"topic", rec.Topic, "key", string(rec.Key), "error", err)
-				return // offset не коммитим → at-least-once передоставит
-			}
-			// CommitRecords коммитит offset+1 для partition записи (односторонне,
-			// ошибки качаются через PollFetches/обратный вызов).
-			_ = s.client.CommitRecords(ctx, rec)
-		})
 	}
+}
+
+func (s *Subscriber) processFetch(ctx context.Context, fetches kgo.Fetches) error {
+	iter := fetches.RecordIter()
+	for !iter.Done() {
+		rec := iter.Next()
+		// Ограниченный бюджет меньше rebalance timeout; handler обязан соблюдать ctx.
+		recordCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		err := s.handleRecord(recordCtx, rec)
+		if err == nil {
+			err = s.client.CommitRecords(recordCtx, rec)
+		}
+		cancel()
+		if err != nil {
+			return fmt.Errorf("kafka record failed topic=%s partition=%d offset=%d: %w", rec.Topic, rec.Partition, rec.Offset, err)
+		}
+	}
+	return nil
+}
+
+func (s *Subscriber) handleRecord(ctx context.Context, rec *kgo.Record) error {
+	for attempt := 0; attempt < 3; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := s.handler(ctx, string(rec.Key), rec.Value); err == nil {
+			return nil
+		}
+		// Не записываем payload, key и произвольный текст ошибки handler в логи.
+		if attempt == 2 {
+			return fmt.Errorf("handler retry budget exhausted")
+		}
+		timer := time.NewTimer(time.Duration(attempt+1) * 100 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+	return nil
 }
 
 // Ping проверяет доступность кластера.
