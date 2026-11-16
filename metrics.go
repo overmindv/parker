@@ -18,6 +18,7 @@ type Metrics struct {
 	requestsTotal   *prometheus.CounterVec
 	requestDuration *prometheus.HistogramVec
 	readyGauge      *prometheus.GaugeVec
+	outboxAge       prometheus.Gauge
 }
 
 // NewMetrics регистрирует метрики запросов в отдельном prometheus-регистре.
@@ -41,7 +42,8 @@ func NewMetrics(enabled bool) *Metrics {
 		Help: "Готовность сервиса (1 — /ready ok, 0 — нет) по service.",
 	}, []string{"service"})
 
-	registry.MustRegister(requestsTotal, requestDuration, readyGauge)
+	outboxAge := prometheus.NewGauge(prometheus.GaugeOpts{Name: "parker_outbox_oldest_age_seconds", Help: "Возраст старейшего неотправленного события."})
+	registry.MustRegister(requestsTotal, requestDuration, readyGauge, outboxAge)
 
 	return &Metrics{
 		Enabled:         enabled,
@@ -49,6 +51,7 @@ func NewMetrics(enabled bool) *Metrics {
 		requestsTotal:   requestsTotal,
 		requestDuration: requestDuration,
 		readyGauge:      readyGauge,
+		outboxAge:       outboxAge,
 	}
 }
 

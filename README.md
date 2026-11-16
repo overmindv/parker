@@ -111,3 +111,23 @@ Rollback: остановить все новые workers и дождаться �
 в транзакции выполнить `UPDATE outbox SET status='pending', claim_token=NULL,
 lease_until=NULL WHERE status='publishing'`. Только после этого запускать старую
 версию. Столбцы миграции сохраняются; replay после ack может дать безопасный дубль.
+
+## Retry, replay и retention (OVM-183)
+
+После migration `202611160002_outbox_retries.sql` publish failure сохраняет attempts
+и `next_attempt_at`: exponential backoff 1–150 секунд плюс jitter 0–100%, максимум
+300 секунд; после 8 ошибок статус `exhausted` больше не планируется. Ошибка broker
+и payload не записываются в логи. Crash до сохранения ошибки восстанавливается по
+истечении lease и может дать дубль. Бюджет публикации оставляет время для записи retry.
+
+Владелец вызывает `ReplayExhausted(ctx, id, expectedGeneration, actorID, isAdmin)`
+только после авторизации оператора. Replay атомарно пишет audit без payload, увеличивает
+поколение, обнуляет attempts и сохраняет исходное событие. Повтор старого generation
+возвращает конфликт даже после следующего exhaustion. Endpoint публично не создаётся.
+
+Передайте `app.Metrics()` последним необязательным аргументом `NewOutboxDispatcher`,
+чтобы `/metrics` включал актуальный `parker_outbox_oldest_age_seconds` (в том числе
+exhausted). Каждый цикл очищает до 100 sent старше 7 дней; pending/exhausted и audit
+не удаляются. Метод `CleanupSent` ограничен 1000 строк и retention не менее суток.
+При rollback exhausted сохраняются и требуют явного решения оператора; не переводить
+их автоматически в pending. Обновление закреплённых service dependencies — OVM-187.

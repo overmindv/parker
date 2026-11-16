@@ -249,3 +249,7 @@ func (s *HTTPServer) HandleFunc(pattern string, handler func(http.ResponseWriter
 func logFatal(err error) {
 	fmt.Fprintf(os.Stderr, "parker: %v\n", err)
 }
+
+// Metrics возвращает регистр приложения для общих инфраструктурных workers.
+// При выключенных метриках возвращает nil.
+func (a *App) Metrics() *Metrics { return a.metrics }

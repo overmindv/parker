@@ -17,6 +17,7 @@ type OutboxRecord struct {
 	Value      []byte
 	ClaimToken string
 	LeaseUntil time.Time
+	Attempts   int
 }
 
 // Outbox — хранилище исходящих событий. Реализуется поверх БД сервиса,
@@ -41,10 +42,11 @@ CREATE TABLE IF NOT EXISTS outbox (
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
     sent_at         TIMESTAMPTZ,
  claim_token UUID,
- lease_until TIMESTAMPTZ
+ lease_until TIMESTAMPTZ,
+ replay_generation INT NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS outbox_status_idx ON outbox(status, next_attempt_at);
-`
+` + OutboxRetryMigration
 
 // OutboxLeaseMigration — append-only миграция владельца перед обновлением worker.
 const OutboxLeaseMigration = `ALTER TABLE outbox ADD COLUMN IF NOT EXISTS claim_token UUID;
@@ -71,14 +73,19 @@ type OutboxDispatcher struct {
 	poll     time.Duration
 	batch    int
 	log      *slog.Logger
+	metrics  *Metrics
 }
 
 // NewOutboxDispatcher создаёт диспетчер.
-func NewOutboxDispatcher(outbox Outbox, producer *Producer, poll time.Duration, log *slog.Logger) *OutboxDispatcher {
+func NewOutboxDispatcher(outbox Outbox, producer *Producer, poll time.Duration, log *slog.Logger, metrics ...*Metrics) *OutboxDispatcher {
 	if poll <= 0 {
 		poll = 500 * time.Millisecond
 	}
-	return newOutboxDispatcher(outbox, producer, poll, 100, log)
+	d := newOutboxDispatcher(outbox, producer, poll, 100, log)
+	if len(metrics) > 0 {
+		d.metrics = metrics[0]
+	}
+	return d
 }
 
 // newOutboxDispatcher — внутренний конструктор с инъекцией publish-интерфейса для тестов.
@@ -86,7 +93,7 @@ func newOutboxDispatcher(outbox Outbox, producer publisher, poll time.Duration, 
 	if poll <= 0 {
 		poll = 500 * time.Millisecond
 	}
-	if batch <= 0 {
+	if batch <= 0 || batch > 100 {
 		batch = 100
 	}
 	return &OutboxDispatcher{
@@ -113,6 +120,20 @@ func (d *OutboxDispatcher) Run(ctx context.Context) error {
 }
 
 func (d *OutboxDispatcher) flushOnce(ctx context.Context) {
+	if store, ok := d.outbox.(interface {
+		QueueAge(context.Context) (time.Duration, error)
+		CleanupSent(context.Context, time.Duration, int) (int64, error)
+	}); ok {
+		if d.metrics != nil {
+			age, err := store.QueueAge(ctx)
+			if err == nil {
+				d.metrics.outboxAge.Set(age.Seconds())
+			}
+		}
+		if _, err := store.CleanupSent(ctx, 7*24*time.Hour, 100); err != nil {
+			d.log.Warn("outbox retention failed")
+		}
+	}
 	records, err := d.outbox.FetchPending(ctx, d.batch)
 	if err != nil {
 		d.log.Warn("outbox: не удалось получить записи", "error", err)
@@ -128,7 +149,7 @@ func (d *OutboxDispatcher) flushOnce(ctx context.Context) {
 		cancel := func() {}
 		if !rec.LeaseUntil.IsZero() {
 			// Делим остаток lease между оставшимися записями: один сбой не съедает batch.
-			budget := time.Until(rec.LeaseUntil) / time.Duration(len(records)-index)
+			budget := time.Until(rec.LeaseUntil) / time.Duration(len(records)-index+1)
 			if budget > 5*time.Second {
 				budget = 5 * time.Second
 			}
@@ -141,7 +162,14 @@ func (d *OutboxDispatcher) flushOnce(ctx context.Context) {
 		cancel()
 		if err != nil {
 			d.log.Error("outbox: не удалось опубликовать",
-				"id", rec.ID, "topic", rec.Topic, "error", err)
+				"id", rec.ID, "topic", rec.Topic)
+			if retry, ok := d.outbox.(interface {
+				MarkClaimFailed(context.Context, OutboxRecord) error
+			}); ok {
+				if err := retry.MarkClaimFailed(ctx, rec); err != nil {
+					d.log.Warn("outbox reschedule failed", "id", rec.ID)
+				}
+			}
 			continue
 		}
 		if leased, ok := d.outbox.(claimedOutbox); ok {
@@ -162,11 +190,12 @@ func (d *OutboxDispatcher) flushOnce(ctx context.Context) {
 // PgOutbox — реализация Outbox поверх pgxpool (таблица outbox, см. OutboxSchema).
 type PgOutbox struct {
 	pool *pgxpool.Pool
+	now  func() time.Time
 }
 
 // NewPgOutbox создаёт postgres-outbox.
 func NewPgOutbox(pool *pgxpool.Pool) *PgOutbox {
-	return &PgOutbox{pool: pool}
+	return &PgOutbox{pool: pool, now: time.Now}
 }
 
 // FetchPending закрепляет строки одним коротким statement; publish не держит транзакцию.
@@ -181,7 +210,7 @@ func (o *PgOutbox) FetchPending(ctx context.Context, limit int) ([]OutboxRecord,
  SELECT id FROM outbox WHERE (status='pending' AND next_attempt_at<=now())
  OR (status='publishing' AND lease_until<=now()) ORDER BY created_at,id LIMIT $1 FOR UPDATE SKIP LOCKED
  ) UPDATE outbox o SET status='publishing',claim_token=gen_random_uuid(),lease_until=now()+interval '30 seconds'
- FROM ready WHERE o.id=ready.id RETURNING o.id,o.topic,o.message_key,o.message_value,o.claim_token,o.lease_until`, limit)
+ FROM ready WHERE o.id=ready.id RETURNING o.id,o.topic,o.message_key,o.message_value,o.claim_token,o.lease_until,o.attempts`, limit)
 	if err != nil {
 		return nil, fmt.Errorf("outbox claim: %w", err)
 	}
@@ -189,7 +218,7 @@ func (o *PgOutbox) FetchPending(ctx context.Context, limit int) ([]OutboxRecord,
 	var records []OutboxRecord
 	for rows.Next() {
 		var rec OutboxRecord
-		if err := rows.Scan(&rec.ID, &rec.Topic, &rec.Key, &rec.Value, &rec.ClaimToken, &rec.LeaseUntil); err != nil {
+		if err := rows.Scan(&rec.ID, &rec.Topic, &rec.Key, &rec.Value, &rec.ClaimToken, &rec.LeaseUntil, &rec.Attempts); err != nil {
 			return nil, err
 		}
 		records = append(records, rec)
