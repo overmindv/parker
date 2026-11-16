@@ -90,3 +90,24 @@ Subscriber обрабатывает одну запись за poll, блоки�
 
 Kafka component: `PARKER_TEST_KAFKA=localhost:19092 go test -race -tags=component . -run TestKafka`.
 Обновление потребителей до нового тега выполняется отдельно в OVM-187.
+
+## Lease стандартного PgOutbox (OVM-182)
+
+Перед обновлением worker владелец применяет новую append-only миграцию из
+`docs/migrations/202611160001_outbox_leases.sql` (также `OutboxLeaseMigration`).
+Сначала остановить старые workers, затем включить новые: смешанный rollout со старым
+алгоритмом без claim недопустим. `OutboxSchema` предназначена для новых таблиц.
+Специализированная execution outbox Tasks не меняется.
+
+`FetchPending` атомарно выдаёт lease на 30 секунд с уникальным `ClaimToken`.
+Dispatcher публикует вне транзакции, с deadline lease, и вызывает `MarkClaimSent`.
+После crash lease истекает: возможен безопасный дубль (at-least-once), но старый
+worker уже не может подтвердить новый claim. Прямые пользователи `PgOutbox.MarkSent`
+должны перейти на `MarkClaimSent`; tokenless ack leased-записей отвергается.
+Существующий интерфейс `Outbox` и собственные адаптеры сервисов совместимы по коду;
+им требуется отдельное внедрение leases. Новый тег и rollout — OVM-187.
+
+Rollback: остановить все новые workers и дождаться завершения публикаций. Затем
+в транзакции выполнить `UPDATE outbox SET status='pending', claim_token=NULL,
+lease_until=NULL WHERE status='publishing'`. Только после этого запускать старую
+версию. Столбцы миграции сохраняются; replay после ack может дать безопасный дубль.

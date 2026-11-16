@@ -11,10 +11,12 @@ import (
 
 // OutboxRecord — запись, ожидающая публикации в Kafka.
 type OutboxRecord struct {
-	ID    string
-	Topic string
-	Key   string
-	Value []byte
+	ID         string
+	Topic      string
+	Key        string
+	Value      []byte
+	ClaimToken string
+	LeaseUntil time.Time
 }
 
 // Outbox — хранилище исходящих событий. Реализуется поверх БД сервиса,
@@ -37,10 +39,22 @@ CREATE TABLE IF NOT EXISTS outbox (
     attempts        INT  NOT NULL DEFAULT 0,
     next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
-    sent_at         TIMESTAMPTZ
+    sent_at         TIMESTAMPTZ,
+ claim_token UUID,
+ lease_until TIMESTAMPTZ
 );
 CREATE INDEX IF NOT EXISTS outbox_status_idx ON outbox(status, next_attempt_at);
 `
+
+// OutboxLeaseMigration — append-only миграция владельца перед обновлением worker.
+const OutboxLeaseMigration = `ALTER TABLE outbox ADD COLUMN IF NOT EXISTS claim_token UUID;
+ALTER TABLE outbox ADD COLUMN IF NOT EXISTS lease_until TIMESTAMPTZ;
+CREATE INDEX IF NOT EXISTS outbox_lease_idx ON outbox(status,lease_until);`
+
+// claimedOutbox добавляет CAS, не меняя существующие реализации Outbox сервисов.
+type claimedOutbox interface {
+	MarkClaimSent(context.Context, OutboxRecord) error
+}
 
 // publisher — публикация записи в Kafka (реализуется *Producer). Выделен
 // интерфейсом, чтобы диспетчер было легко юнит-тестировать без реального кластера.
@@ -109,13 +123,34 @@ func (d *OutboxDispatcher) flushOnce(ctx context.Context) {
 	}
 
 	sentIDs := make([]string, 0, len(records))
-	for _, rec := range records {
-		if err := d.producer.Publish(ctx, rec.Topic, rec.Key, rec.Value); err != nil {
+	for index, rec := range records {
+		publishCtx := ctx
+		cancel := func() {}
+		if !rec.LeaseUntil.IsZero() {
+			// Делим остаток lease между оставшимися записями: один сбой не съедает batch.
+			budget := time.Until(rec.LeaseUntil) / time.Duration(len(records)-index)
+			if budget > 5*time.Second {
+				budget = 5 * time.Second
+			}
+			publishCtx, cancel = context.WithTimeout(ctx, budget)
+		}
+		err := publishCtx.Err()
+		if err == nil {
+			err = d.producer.Publish(publishCtx, rec.Topic, rec.Key, rec.Value)
+		}
+		cancel()
+		if err != nil {
 			d.log.Error("outbox: не удалось опубликовать",
 				"id", rec.ID, "topic", rec.Topic, "error", err)
 			continue
 		}
-		sentIDs = append(sentIDs, rec.ID)
+		if leased, ok := d.outbox.(claimedOutbox); ok {
+			if err := leased.MarkClaimSent(ctx, rec); err != nil {
+				d.log.Warn("outbox claim acknowledgement failed", "id", rec.ID)
+			}
+		} else {
+			sentIDs = append(sentIDs, rec.ID)
+		}
 	}
 	if len(sentIDs) > 0 {
 		if err := d.outbox.MarkSent(ctx, sentIDs); err != nil {
@@ -134,29 +169,45 @@ func NewPgOutbox(pool *pgxpool.Pool) *PgOutbox {
 	return &PgOutbox{pool: pool}
 }
 
-// FetchPending вычитывает готовые записи с блокировкой строк (SKIP LOCKED).
+// FetchPending закрепляет строки одним коротким statement; publish не держит транзакцию.
 func (o *PgOutbox) FetchPending(ctx context.Context, limit int) ([]OutboxRecord, error) {
-	rows, err := o.pool.Query(ctx, `
-		SELECT id, topic, message_key, message_value
-		FROM outbox
-		WHERE status = 'pending' AND next_attempt_at <= now()
-		ORDER BY created_at
-		LIMIT $1
-		FOR UPDATE SKIP LOCKED`, limit)
+	if limit <= 0 {
+		return nil, nil
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	rows, err := o.pool.Query(ctx, `WITH ready AS (
+ SELECT id FROM outbox WHERE (status='pending' AND next_attempt_at<=now())
+ OR (status='publishing' AND lease_until<=now()) ORDER BY created_at,id LIMIT $1 FOR UPDATE SKIP LOCKED
+ ) UPDATE outbox o SET status='publishing',claim_token=gen_random_uuid(),lease_until=now()+interval '30 seconds'
+ FROM ready WHERE o.id=ready.id RETURNING o.id,o.topic,o.message_key,o.message_value,o.claim_token,o.lease_until`, limit)
 	if err != nil {
-		return nil, fmt.Errorf("outbox fetch: %w", err)
+		return nil, fmt.Errorf("outbox claim: %w", err)
 	}
 	defer rows.Close()
-
 	var records []OutboxRecord
 	for rows.Next() {
 		var rec OutboxRecord
-		if err := rows.Scan(&rec.ID, &rec.Topic, &rec.Key, &rec.Value); err != nil {
-			return nil, fmt.Errorf("outbox scan: %w", err)
+		if err := rows.Scan(&rec.ID, &rec.Topic, &rec.Key, &rec.Value, &rec.ClaimToken, &rec.LeaseUntil); err != nil {
+			return nil, err
 		}
 		records = append(records, rec)
 	}
 	return records, rows.Err()
+}
+
+// MarkClaimSent не позволяет старому worker подтвердить новую lease.
+func (o *PgOutbox) MarkClaimSent(ctx context.Context, rec OutboxRecord) error {
+	tag, err := o.pool.Exec(ctx, `UPDATE outbox SET status='sent',sent_at=now(),claim_token=NULL,lease_until=NULL,attempts=attempts+1
+ WHERE id=$1 AND claim_token=$2 AND status='publishing' AND lease_until>now()`, rec.ID, rec.ClaimToken)
+	if err != nil {
+		return fmt.Errorf("outbox mark claim: %w", err)
+	}
+	if tag.RowsAffected() != 1 {
+		return fmt.Errorf("outbox claim lost")
+	}
+	return nil
 }
 
 // MarkSent помечает записи отправленными.
@@ -164,12 +215,15 @@ func (o *PgOutbox) MarkSent(ctx context.Context, ids []string) error {
 	if len(ids) == 0 {
 		return nil
 	}
-	_, err := o.pool.Exec(ctx, `
+	tag, err := o.pool.Exec(ctx, `
 		UPDATE outbox
 		SET status = 'sent', sent_at = now(), attempts = attempts + 1
-		WHERE id = ANY($1)`, ids)
+		WHERE id = ANY($1) AND status='pending' AND claim_token IS NULL`, ids)
 	if err != nil {
 		return fmt.Errorf("outbox mark sent: %w", err)
+	}
+	if tag.RowsAffected() != int64(len(ids)) {
+		return fmt.Errorf("outbox requires claim acknowledgement")
 	}
 	return nil
 }

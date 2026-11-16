@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"testing"
+	"time"
 )
 
 type fakeOutbox struct {
@@ -85,5 +86,28 @@ func TestOutboxDispatcher_EmptyNoOp(t *testing.T) {
 	d.flushOnce(context.Background())
 	if len(pub.published) != 0 || len(outbox.sent) != 0 {
 		t.Fatal("при пустой очереди не должно быть публикаций")
+	}
+}
+
+type budgetPublisher struct{ healthy bool }
+
+func (p *budgetPublisher) Publish(ctx context.Context, topic, key string, value []byte) error {
+	if topic == "slow" {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	p.healthy = true
+	return nil
+}
+func TestOutboxSlowRecordDoesNotConsumeBatchLease(t *testing.T) {
+	deadline := time.Now().Add(200 * time.Millisecond)
+	outbox := &fakeOutbox{pending: []OutboxRecord{{ID: "1", Topic: "slow", LeaseUntil: deadline}, {ID: "2", Topic: "healthy", LeaseUntil: deadline}}}
+	pub := &budgetPublisher{}
+	newOutboxDispatcher(outbox, pub, 0, 100, discardLog()).flushOnce(context.Background())
+	if !pub.healthy {
+		t.Fatal("slow record starved healthy event")
 	}
 }
