@@ -132,6 +132,7 @@ func run(app *parker.App) error {
 | [`07_cli_init.md`](07_cli_init.md) | Фаза 6: CLI `parker init`, шаблоны, скаффолд, compose-блок |
 | [`08_service_bootstrap.md`](08_service_bootstrap.md) | **Ключевой результат**: workflow создания сервиса (Части 1–5) + платформенные аналоги |
 | [`09_testing.md`](09_testing.md) | Фаза 7: как тестировать parker и сгенерированный сервис |
+| [`10_reliability_release.md`](10_reliability_release.md) | v0.2.0: совместимость, migration/rollback и release gate |
 | [`TASKS.md`](TASKS.md) | сводный чек-лист задач (галочки для отслеживания) |
 
 ## Что сделать в первую очередь

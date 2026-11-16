@@ -90,7 +90,7 @@ Subscriber обрабатывает одну запись за poll, блоки�
 через ошибку предыдущего. Payload и key не включаются в сообщения об ошибках.
 
 Kafka component: `PARKER_TEST_KAFKA=localhost:19092 go test -race -tags=component . -run TestKafka`.
-Обновление потребителей до нового тега выполняется отдельно в OVM-187.
+Порядок обновления потребителей: [release v0.2.0](docs/releases/v0.2.0.md).
 
 ## Lease стандартного PgOutbox (OVM-182)
 
@@ -106,7 +106,7 @@ Dispatcher публикует вне транзакции, с deadline lease, и
 worker уже не может подтвердить новый claim. Прямые пользователи `PgOutbox.MarkSent`
 должны перейти на `MarkClaimSent`; tokenless ack leased-записей отвергается.
 Существующий интерфейс `Outbox` и собственные адаптеры сервисов совместимы по коду;
-им требуется отдельное внедрение leases. Новый тег и rollout — OVM-187.
+им требуется отдельное внедрение leases. Миграция и rollout описаны в [release v0.2.0](docs/releases/v0.2.0.md).
 
 Rollback: остановить все новые workers и дождаться завершения публикаций. Затем
 в транзакции выполнить `UPDATE outbox SET status='pending', claim_token=NULL,
@@ -131,7 +131,7 @@ lease_until=NULL WHERE status='publishing'`. Только после этого 
 exhausted). Каждый цикл очищает до 100 sent старше 7 дней; pending/exhausted и audit
 не удаляются. Метод `CleanupSent` ограничен 1000 строк и retention не менее суток.
 При rollback exhausted сохраняются и требуют явного решения оператора; не переводить
-их автоматически в pending. Обновление закреплённых service dependencies — OVM-187.
+их автоматически в pending. Обновление закреплённых service dependencies — по процедуре release v0.2.0.
 
 
 ## Изолированный шаблон (OVM-186)
@@ -172,4 +172,12 @@ ACL задаются оператором на нужные topic/group; изм�
 macOS SDK workaround) поднимает выделенный TLS/SCRAM broker с временными сертификатами,
 проверяет ограниченный topic/group и отказы password/trust/hostname, затем удаляет его.
 Для Linux/CI достаточно `scripts/test-kafka-security.sh`.
-Обновление сервисов и выпуск reliability tag остаются в OVM-187.
+Обновление сервисов выполняется по процедуре release v0.2.0.
+
+## Reliability release v0.2.0
+
+Версия CLI — 0.2.0. [Changelog, совместимость, owner migrations и rollback](docs/releases/v0.2.0.md).
+Потребитель обновляется через `go get github.com/overmindv/parker@v0.2.0`, без replace.
+Bootstrap template сохраняет v0.1.0; явный go get подключает release и проверяется
+`make release-check RELEASE_VERSION=v0.2.0`. Сервисы не обновляются автоматически:
+сначала owner migrations и TLS/ACL, затем согласованное переключение workers.

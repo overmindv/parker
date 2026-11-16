@@ -28,3 +28,8 @@ tidy:
 # tools — ставит вспомогательные инструменты в bin/ (один раз, gitignored).
 $(GOLANGCI_LINT):
 	GOBIN="$(LOCAL_BIN)" go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.11.4
+
+.PHONY: release-check
+# Проверка тега после публикации; сгенерированный сервис не использует replace.
+release-check:
+	scripts/verify-release.sh "$(RELEASE_VERSION)"

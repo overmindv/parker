@@ -1,0 +1,70 @@
+name: Parker Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: parker-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: parker_release
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres -d parker_release"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      PARKER_TEST_DSN: postgres://postgres:postgres@localhost:5432/parker_release?sslmode=disable
+      PARKER_TEST_KAFKA: 127.0.0.1:19092
+      RELEASE_VERSION: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Verify release identity
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          [[ "$RELEASE_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          test "$(go run ./cmd/parker version)" = "parker ${RELEASE_VERSION#v}"
+          test -f "docs/releases/$RELEASE_VERSION.md"
+          test "$(git cat-file -t "refs/tags/$RELEASE_VERSION")" = tag
+          git merge-base --is-ancestor HEAD origin/main
+          RELEASE_COMMIT=$(git rev-parse HEAD)
+          SUCCESS_COUNT=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$RELEASE_COMMIT&event=push&status=success" --jq "[.workflow_runs[] | select(.head_sha == \"$RELEASE_COMMIT\" and .head_branch == \"main\" and .conclusion == \"success\")] | length")
+          test "$SUCCESS_COUNT" -gt 0
+      - run: make build test
+      - uses: golangci/golangci-lint-action@v8
+        with:
+          version: v2.11.4
+      - name: Start isolated Kafka
+        run: docker run -d --name kafka -p 19092:19092 redpandadata/redpanda:v24.3.18 redpanda start --overprovisioned --smp 1 --memory 512M --reserve-memory 0M --node-id 0 --check=false --kafka-addr 0.0.0.0:19092 --advertise-kafka-addr 127.0.0.1:19092
+      - run: go test -race -tags=component ./...
+      - run: scripts/test-kafka-security.sh
+      - name: Verify published consumer without replace
+        run: make release-check RELEASE_VERSION="$RELEASE_VERSION"
+      - name: Publish verified release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! gh release view "$RELEASE_VERSION" >/dev/null 2>&1; then
+            gh release create "$RELEASE_VERSION" --verify-tag --title "Parker $RELEASE_VERSION" --notes-file "docs/releases/$RELEASE_VERSION.md"
+          fi
