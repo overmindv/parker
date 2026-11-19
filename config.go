@@ -43,6 +43,13 @@ func Load() (Options, error) {
 	}
 	opts.MetricsEnabled = EnvBool("METRICS_ENABLED", opts.MetricsEnabled)
 	opts.PprofEnabled = EnvBool("PPROF_ENABLED", opts.PprofEnabled)
+	opts.Tracing.Endpoint = strings.TrimSpace(os.Getenv("PARKER_OTLP_TRACE_ENDPOINT"))
+	if raw := strings.TrimSpace(os.Getenv("PARKER_TRACE_SAMPLE_RATIO")); raw != "" {
+		opts.Tracing.SampleRatio, err = strconv.ParseFloat(raw, 64)
+		if err != nil {
+			return Options{}, errors.New("PARKER_TRACE_SAMPLE_RATIO must be between 0 and 1")
+		}
+	}
 
 	if err := opts.Validate(); err != nil {
 		return Options{}, fmt.Errorf("validate options: %w", err)
@@ -89,6 +96,9 @@ func (o Options) Validate() error {
 
 	security := o.KafkaSecurity
 	security.Environment = o.Environment
+	if _, err := o.Tracing.collectorEndpoint(o.Environment, o.ServiceName); err != nil {
+		return err
+	}
 	return security.validate()
 }
 

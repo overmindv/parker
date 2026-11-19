@@ -28,6 +28,7 @@ type Runner struct {
 	log             *slog.Logger
 	shutdownTimeout time.Duration
 	runnables       []namedRunnable
+	afterShutdown   func(context.Context)
 }
 
 // NewRunner создаёт Runner.
@@ -100,6 +101,9 @@ func (r *Runner) Run(ctx context.Context, server *http.Server) error {
 	case <-workersDone:
 	case <-shutdownCtx.Done():
 		r.log.Warn("таймаут завершения фоновых воркеров")
+	}
+	if r.afterShutdown != nil {
+		r.afterShutdown(shutdownCtx)
 	}
 
 	select {
