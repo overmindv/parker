@@ -10,6 +10,7 @@ import (
 )
 
 func TestReleaseMigrationFromV010(t *testing.T) {
+
 	ctx := context.Background()
 	pool, err := OpenPool(ctx, testDSN(t))
 	if err != nil {
