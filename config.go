@@ -10,6 +10,18 @@ import (
 	"time"
 )
 
+const (
+	environmentLocal       = "local"
+	environmentDevelopment = "development"
+	environmentTest        = "test"
+	environmentStaging     = "staging"
+	environmentProduction  = "production"
+	logLevelDebug          = "debug"
+	logLevelInfo           = "info"
+	logLevelWarn           = "warn"
+	logLevelError          = "error"
+)
+
 // Load читает стандартные env-переменные parker в Options поверх DefaultOptions()
 // и валидирует результат.
 func Load() (Options, error) {
@@ -54,6 +66,7 @@ func Load() (Options, error) {
 	if err := opts.Validate(); err != nil {
 		return Options{}, fmt.Errorf("validate options: %w", err)
 	}
+
 	return opts, nil
 }
 
@@ -67,13 +80,13 @@ func (o Options) Validate() error {
 	}
 
 	switch o.LogLevel {
-	case "debug", "info", "warn", "error":
+	case logLevelDebug, logLevelInfo, logLevelWarn, logLevelError:
 	default:
 		return fmt.Errorf("недопустимый LOG_LEVEL %q: ожидается debug, info, warn или error", o.LogLevel)
 	}
 
 	switch o.Environment {
-	case "local", "development", "test", "staging", "production":
+	case environmentLocal, environmentDevelopment, environmentTest, environmentStaging, environmentProduction:
 	default:
 		return fmt.Errorf("недопустимый ENV %q", o.Environment)
 	}
@@ -99,6 +112,7 @@ func (o Options) Validate() error {
 	if _, err := o.Tracing.collectorEndpoint(o.Environment, o.ServiceName); err != nil {
 		return err
 	}
+
 	return security.validate()
 }
 
@@ -117,6 +131,7 @@ func validateDatabaseURL(value string) error {
 	if strings.TrimPrefix(parsed.Path, "/") == "" {
 		return errors.New("не указано имя базы данных")
 	}
+
 	return nil
 }
 

@@ -13,19 +13,20 @@ func NewLogger(level string) (*slog.Logger, error) {
 		return nil, err
 	}
 	handler := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slogLevel})
+
 	return slog.New(handler), nil
 }
 
 // parseLevel преобразует строковый уровень в slog.Level.
 func parseLevel(value string) (slog.Level, error) {
 	switch value {
-	case "debug":
+	case logLevelDebug:
 		return slog.LevelDebug, nil
-	case "info":
+	case logLevelInfo:
 		return slog.LevelInfo, nil
-	case "warn":
+	case logLevelWarn:
 		return slog.LevelWarn, nil
-	case "error":
+	case logLevelError:
 		return slog.LevelError, nil
 	default:
 		return 0, fmt.Errorf("недопустимый уровень лога %q: ожидается debug, info, warn или error", value)
