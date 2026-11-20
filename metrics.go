@@ -64,6 +64,11 @@ func (m *Metrics) SetReady(service string, ready bool) {
 	m.readyGauge.WithLabelValues(service).Set(v)
 }
 
+// Register добавляет метрику сервиса в его реестр /metrics.
+func (m *Metrics) Register(collector prometheus.Collector) error {
+	return m.registry.Register(collector)
+}
+
 // observe записывает метрику одного запроса.
 func (m *Metrics) observe(service, method, route string, status int, dur time.Duration) {
 	m.requestsTotal.WithLabelValues(service, method, route, strconv.Itoa(status)).Inc()

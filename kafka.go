@@ -53,6 +53,21 @@ func (p *Producer) Close() { p.client.Close() }
 // Handler — обработчик записи из подписки. Ключ задаёт семантику (тип события).
 type Handler func(ctx context.Context, key string, value []byte) error
 
+// RecordPosition содержит координаты записи без ключа, тела и заголовков.
+type RecordPosition struct {
+	Topic     string
+	Partition int32
+	Offset    int64
+}
+
+type positionKey struct{}
+
+// PositionFromContext возвращает координаты записи внутри вызова Handler.
+func PositionFromContext(ctx context.Context) (RecordPosition, bool) {
+	position, ok := ctx.Value(positionKey{}).(RecordPosition)
+	return position, ok
+}
+
 // Subscriber — consumer-group подписчик: читает топики, вызывает Handler.
 // Коммит offset'а выполняется после успешной обработки (at-least-once).
 type subscriberClient interface {
@@ -125,7 +140,10 @@ func (s *Subscriber) processFetch(ctx context.Context, fetches kgo.Fetches) erro
 		rec := iter.Next()
 		// Ограниченный бюджет меньше rebalance timeout; handler обязан соблюдать ctx.
 		recordCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-		err := s.handleRecord(recordCtx, rec)
+		handlerCtx := context.WithValue(recordCtx, positionKey{}, RecordPosition{
+			Topic: rec.Topic, Partition: rec.Partition, Offset: rec.Offset,
+		})
+		err := s.handleRecord(handlerCtx, rec)
 		if err == nil {
 			err = s.client.CommitRecords(recordCtx, rec)
 		}
