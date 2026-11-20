@@ -8,6 +8,8 @@ import (
 )
 
 func TestDashboardJSONIsValidAndReferencesParkerMetrics(t *testing.T) {
+	t.Parallel()
+
 	raw, err := os.ReadFile("docs/dashboard.json")
 	if err != nil {
 		t.Skip("docs/dashboard.json не найден")
@@ -23,6 +25,8 @@ func TestDashboardJSONIsValidAndReferencesParkerMetrics(t *testing.T) {
 }
 
 func TestAlertsExampleExists(t *testing.T) {
+	t.Parallel()
+
 	if _, err := os.Stat("docs/alerts.example.yml"); err != nil {
 		t.Skip("docs/alerts.example.yml не найден")
 	}

@@ -9,6 +9,8 @@ import (
 )
 
 func TestValidateServiceName(t *testing.T) {
+	t.Parallel()
+
 	valid := []string{"tasks", "user-service", "a", "api-gateway", "svc2x"}
 	for _, name := range valid {
 		if err := ValidateServiceName(name); err != nil {
@@ -24,6 +26,8 @@ func TestValidateServiceName(t *testing.T) {
 }
 
 func TestGenerateService_WithPG(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	if err := GenerateService(dir, "demo", true, false); err != nil {
 		t.Fatal(err)
@@ -50,7 +54,7 @@ func TestGenerateService_WithPG(t *testing.T) {
 		}
 	}
 
-	gomod, err := os.ReadFile(filepath.Join(dir, "go.mod"))
+	gomod, err := os.ReadFile(filepath.Join(dir, "go.mod")) //nolint:gosec // dir создан через t.TempDir
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,7 +66,7 @@ func TestGenerateService_WithPG(t *testing.T) {
 		t.Errorf("go.mod не должен требовать соседний checkout:\n%s", gomodStr)
 	}
 
-	main, err := os.ReadFile(filepath.Join(dir, "cmd", "demo", "main.go"))
+	main, err := os.ReadFile(filepath.Join(dir, "cmd", "demo", "main.go")) //nolint:gosec // dir создан через t.TempDir
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,6 +80,8 @@ func TestGenerateService_WithPG(t *testing.T) {
 }
 
 func TestGenerateService_NoPG(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	if err := GenerateService(dir, "lite", false, false); err != nil {
 		t.Fatal(err)
@@ -83,7 +89,7 @@ func TestGenerateService_NoPG(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, "migrations")); !os.IsNotExist(err) {
 		t.Fatal("без --pg не должно быть migrations/")
 	}
-	main, err := os.ReadFile(filepath.Join(dir, "cmd", "lite", "main.go"))
+	main, err := os.ReadFile(filepath.Join(dir, "cmd", "lite", "main.go")) //nolint:gosec // dir создан через t.TempDir
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,12 +99,16 @@ func TestGenerateService_NoPG(t *testing.T) {
 }
 
 func TestGenerateService_InvalidName(t *testing.T) {
+	t.Parallel()
+
 	if err := GenerateService(t.TempDir(), "My Service", true, false); err == nil {
 		t.Fatal("ожидалась ошибка при недопустимом имени")
 	}
 }
 
 func TestComposeBlockContainsService(t *testing.T) {
+	t.Parallel()
+
 	var sb strings.Builder
 	PrintComposeBlock(&sb, "demo", true, true)
 	out := sb.String()
@@ -110,11 +120,13 @@ func TestComposeBlockContainsService(t *testing.T) {
 }
 
 func TestGeneratedModuleSnapshot(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	if err := GenerateService(dir, "sample", false, false); err != nil {
 		t.Fatal(err)
 	}
-	data, err := os.ReadFile(filepath.Join(dir, "go.mod"))
+	data, err := os.ReadFile(filepath.Join(dir, "go.mod")) //nolint:gosec // dir создан через t.TempDir
 	if err != nil {
 		t.Fatal(err)
 	}

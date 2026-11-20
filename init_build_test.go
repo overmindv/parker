@@ -12,6 +12,7 @@ import (
 // TestGenerateService_Builds проверяет, что сгенерированный сервис собирается
 // против соседнего ../parker (запускается в CI, где есть сеть для go mod download).
 func TestGenerateService_Builds(t *testing.T) {
+
 	if testing.Short() {
 		t.Skip("short mode")
 	}
