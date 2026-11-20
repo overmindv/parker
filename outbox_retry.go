@@ -26,12 +26,13 @@ func outboxRetryAt(now time.Time, attempt int, jitter float64) time.Time {
 	if jitter > 1 {
 		jitter = 1
 	}
+
 	return now.Add(delay + time.Duration(float64(delay)*jitter))
 }
 
 // MarkClaimFailed сохраняет расписание, не сохраняя raw broker errors или payload.
 func (o *PgOutbox) MarkClaimFailed(ctx context.Context, rec OutboxRecord) error {
-	next := outboxRetryAt(o.now(), rec.Attempts+1, rand.Float64())
+	next := outboxRetryAt(o.now(), rec.Attempts+1, rand.Float64()) //nolint:gosec // jitter не используется для криптографии
 	tag, err := o.pool.Exec(ctx, `UPDATE outbox SET attempts=attempts+1,
  status=CASE WHEN attempts+1 >= $3 THEN 'exhausted' ELSE 'pending' END,
  next_attempt_at=$4,claim_token=NULL,lease_until=NULL
@@ -42,6 +43,7 @@ func (o *PgOutbox) MarkClaimFailed(ctx context.Context, rec OutboxRecord) error 
 	if tag.RowsAffected() != 1 {
 		return fmt.Errorf("outbox claim lost")
 	}
+
 	return nil
 }
 
@@ -61,6 +63,7 @@ func (o *PgOutbox) ReplayExhausted(ctx context.Context, id string, generation in
 	if tag.RowsAffected() != 1 {
 		return fmt.Errorf("outbox replay conflict")
 	}
+
 	return nil
 }
 
@@ -68,6 +71,7 @@ func (o *PgOutbox) ReplayExhausted(ctx context.Context, id string, generation in
 func (o *PgOutbox) QueueAge(ctx context.Context) (time.Duration, error) {
 	var seconds float64
 	err := o.pool.QueryRow(ctx, `SELECT COALESCE(GREATEST(EXTRACT(EPOCH FROM now()-min(created_at)),0),0)::float8 FROM outbox WHERE status<>'sent'`).Scan(&seconds)
+
 	return time.Duration(seconds * float64(time.Second)), err
 }
 
@@ -81,6 +85,7 @@ func (o *PgOutbox) CleanupSent(ctx context.Context, retention time.Duration, lim
 	}
 	tag, err := o.pool.Exec(ctx, `WITH stale AS (SELECT id FROM outbox WHERE status='sent' AND sent_at<$1 ORDER BY sent_at LIMIT $2 FOR UPDATE SKIP LOCKED)
  DELETE FROM outbox WHERE id IN (SELECT id FROM stale)`, o.now().Add(-retention), limit)
+
 	return tag.RowsAffected(), err
 }
 

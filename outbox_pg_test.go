@@ -9,6 +9,7 @@ import (
 )
 
 func TestPgOutbox_FetchAndMark(t *testing.T) {
+
 	dsn := testDSN(t)
 	ctx := context.Background()
 
@@ -56,6 +57,7 @@ func TestPgOutbox_FetchAndMark(t *testing.T) {
 }
 
 func TestPgOutboxExclusiveLeaseAndStaleAck(t *testing.T) {
+
 	ctx := context.Background()
 	pool, err := OpenPool(ctx, testDSN(t))
 	if err != nil {
@@ -106,6 +108,7 @@ func TestPgOutboxExclusiveLeaseAndStaleAck(t *testing.T) {
 }
 
 func TestPgOutboxRetryExhaustionReplayAndRetention(t *testing.T) {
+
 	ctx := context.Background()
 	pool, err := OpenPool(ctx, testDSN(t))
 	if err != nil {

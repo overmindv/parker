@@ -6,6 +6,8 @@ import (
 )
 
 func TestOutboxBackoffUsesClockAndBoundedJitter(t *testing.T) {
+	t.Parallel()
+
 	now := time.Date(2026, 11, 16, 0, 0, 0, 0, time.UTC)
 	for attempt := 1; attempt <= 100; attempt++ {
 		low := outboxRetryAt(now, attempt, 0)
@@ -20,6 +22,8 @@ func TestOutboxBackoffUsesClockAndBoundedJitter(t *testing.T) {
 }
 
 func TestOutboxMetricsExposeQueueAge(t *testing.T) {
+	t.Parallel()
+
 	m := NewMetrics(true)
 	m.outboxAge.Set(123)
 	families, err := m.registry.Gather()
@@ -31,6 +35,7 @@ func TestOutboxMetricsExposeQueueAge(t *testing.T) {
 			if f.Metric[0].GetGauge().GetValue() != 123 {
 				t.Fatal("wrong age")
 			}
+
 			return
 		}
 	}
