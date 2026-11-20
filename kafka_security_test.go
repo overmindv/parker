@@ -11,6 +11,8 @@ import (
 )
 
 func TestKafkaSecurityRejectsUnsafeConfigurations(t *testing.T) {
+	t.Parallel()
+
 	cases := []KafkaSecurity{
 		{Environment: "production"},
 		{SASLMechanism: "PLAIN", Username: "u", Password: "sensitive"},
@@ -30,6 +32,8 @@ func TestKafkaSecurityRejectsUnsafeConfigurations(t *testing.T) {
 	}
 }
 func TestKafkaSecurityIsSharedAndRedacted(t *testing.T) {
+	t.Parallel()
+
 	security := KafkaSecurity{TLS: true, SASLMechanism: "SCRAM-SHA-512", Username: "private-user", Password: "sensitive"}
 	if strings.Contains(fmt.Sprintf("%+v %#v", security, security), "sensitive") {
 		t.Fatal("secret in formatted config")
@@ -52,6 +56,8 @@ func TestKafkaSecurityIsSharedAndRedacted(t *testing.T) {
 	}
 	s.Close()
 }
+
+//nolint:paralleltest // t.Setenv изменяет process-wide environment
 func TestKafkaSecurityEnvFailsClosed(t *testing.T) {
 	t.Setenv("KAFKA_TLS_ENABLED", "typo")
 	if _, err := Load(); err == nil {
@@ -71,6 +77,8 @@ func TestKafkaSecurityEnvFailsClosed(t *testing.T) {
 }
 
 func TestKafkaRejectsMalformedCertificatesAndAppDowngrade(t *testing.T) {
+	t.Parallel()
+
 	file := filepath.Join(t.TempDir(), "bad.pem")
 	if err := os.WriteFile(file, []byte("not a certificate"), 0600); err != nil {
 		t.Fatal(err)

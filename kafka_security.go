@@ -14,6 +14,13 @@ import (
 	"github.com/twmb/franz-go/pkg/sasl/scram"
 )
 
+const (
+	kafkaSecurityRedacted = "KafkaSecurity(redacted)"
+	saslPlain             = "PLAIN"
+	saslSCRAMSHA256       = "SCRAM-SHA-256"
+	saslSCRAMSHA512       = "SCRAM-SHA-512"
+)
+
 // KafkaSecurity — общие настройки producer/subscriber. Нулевое значение сохраняет local plaintext.
 // Production требует TLS; проверка CA и hostname никогда не отключается.
 type KafkaSecurity struct {
@@ -29,18 +36,18 @@ type KafkaSecurity struct {
 }
 
 // String/LogValue исключают credentials из обычного форматирования и slog.
-func (KafkaSecurity) GoString() string { return "KafkaSecurity(redacted)" }
+func (KafkaSecurity) GoString() string { return kafkaSecurityRedacted }
 
-func (KafkaSecurity) String() string         { return "KafkaSecurity(redacted)" }
+func (KafkaSecurity) String() string         { return kafkaSecurityRedacted }
 func (s KafkaSecurity) LogValue() slog.Value { return slog.StringValue(s.String()) }
 
 func (s KafkaSecurity) validate() error {
 	switch s.Environment {
-	case "", "local", "development", "test", "staging", "production":
+	case "", environmentLocal, environmentDevelopment, environmentTest, environmentStaging, environmentProduction:
 	default:
 		return fmt.Errorf("invalid Kafka environment")
 	}
-	if s.Environment == "production" && !s.TLS {
+	if s.Environment == environmentProduction && !s.TLS {
 		return fmt.Errorf("kafka TLS required in production")
 	}
 	if !s.TLS && (s.CAFile != "" || s.CertFile != "" || s.KeyFile != "" || s.ServerName != "") {
@@ -54,7 +61,7 @@ func (s KafkaSecurity) validate() error {
 		if s.Username != "" || s.Password != "" {
 			return fmt.Errorf("kafka SASL mechanism required")
 		}
-	case "PLAIN", "SCRAM-SHA-256", "SCRAM-SHA-512":
+	case saslPlain, saslSCRAMSHA256, saslSCRAMSHA512:
 		if !s.TLS {
 			return fmt.Errorf("kafka SASL requires TLS")
 		}
@@ -64,6 +71,7 @@ func (s KafkaSecurity) validate() error {
 	default:
 		return fmt.Errorf("unsupported Kafka SASL mechanism")
 	}
+
 	return nil
 }
 
@@ -109,6 +117,7 @@ func kafkaSecurityOptions(settings ...KafkaSecurity) ([]kgo.Opt, error) {
 	case "SCRAM-SHA-512":
 		opts = append(opts, kgo.SASL(scram.Auth{User: s.Username, Pass: s.Password}.AsSha512Mechanism()))
 	}
+
 	return opts, nil
 }
 
@@ -121,5 +130,6 @@ func loadKafkaSecurity(environment string) (KafkaSecurity, error) {
 		}
 		s.TLS = enabled
 	}
+
 	return s, s.validate()
 }
