@@ -22,9 +22,11 @@ func captureOutput(stream **os.File, fn func()) string {
 	buf := make([]byte, 4096)
 	n, _ := r.Read(buf)
 	_ = r.Close()
+
 	return string(buf[:n])
 }
 
+//nolint:paralleltest // captureOutput временно заменяет process-wide os.Stdout
 func TestMainArgs_Version(t *testing.T) {
 	out := captureOutput(&os.Stdout, func() {
 		if code := MainArgs(nil, []string{"version"}); code != 0 {
@@ -36,6 +38,7 @@ func TestMainArgs_Version(t *testing.T) {
 	}
 }
 
+//nolint:paralleltest // captureOutput временно заменяет process-wide os.Stderr
 func TestMainArgs_UnknownCommand(t *testing.T) {
 	out := captureOutput(&os.Stderr, func() {
 		if code := MainArgs(nil, []string{"frobnicate"}); code != 2 {

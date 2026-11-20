@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	_ "net/http/pprof" // регистрирует pprof-хендлеры на http.DefaultServeMux
+	_ "net/http/pprof" //nolint:gosec // pprof включается явно и обслуживается отдельным внутренним listener
 	"os"
 	"os/signal"
 	"sync"
@@ -16,7 +16,10 @@ import (
 )
 
 // Version — версия parker, печатается командой `version`.
-const Version = "0.2.0"
+const (
+	Version      = "0.2.0"
+	serveCommand = "serve"
+)
 
 // App — единая точка входа прикладного сервиса: всё инфраструктурное уже собрано.
 // Сервис в вызываемом run(*App) регистрирует бизнес-роуты, health-чекки и воркеры.
@@ -45,18 +48,19 @@ func Main(run func(*App) error, opts ...Option) int {
 // MainArgs запускает приложение с заданным списком аргументов.
 // Подкоманды: serve (по умолчанию), migrate, init, version.
 func MainArgs(run func(*App) error, args []string, opts ...Option) int {
-	cmd := "serve"
+	cmd := serveCommand
 	if len(args) > 0 && args[0] != "" && args[0][0] != '-' {
 		cmd = args[0]
 	}
 
 	switch cmd {
-	case "serve":
+	case serveCommand:
 		// runServe не использует args (инфраструктурная часть уже собрана в Options),
 		// поэтому передаём nil — исключаем panic на args[1:] при пустом списке аргументов.
 		return runServe(run, nil, opts...)
 	case "version":
 		_, _ = fmt.Fprintln(os.Stdout, "parker", Version)
+
 		return 0
 	case "migrate":
 		return runMigrateCLI(args[1:])
@@ -65,6 +69,7 @@ func MainArgs(run func(*App) error, args []string, opts ...Option) int {
 	default:
 		fmt.Fprintf(os.Stderr, "parker: неизвестная команда %q\n", cmd)
 		fmt.Fprintln(os.Stderr, "доступные команды: serve, migrate, init, version")
+
 		return 2
 	}
 }
@@ -74,6 +79,7 @@ func runServe(run func(*App) error, _ []string, opts ...Option) int {
 	options, err := Load()
 	if err != nil {
 		logFatal(err)
+
 		return 1
 	}
 	options = options.Apply(opts)
@@ -81,12 +87,14 @@ func runServe(run func(*App) error, _ []string, opts ...Option) int {
 	logger, err := NewLogger(options.LogLevel)
 	if err != nil {
 		logFatal(err)
+
 		return 1
 	}
 
 	tracing, err := newTraceRuntime(options, logger)
 	if err != nil {
 		logFatal(err)
+
 		return 1
 	}
 	app := &App{opts: options, log: logger, health: NewHealthRegistry(), tracing: tracing}
@@ -99,6 +107,7 @@ func runServe(run func(*App) error, _ []string, opts ...Option) int {
 				tracing.shutdown(context.Background())
 			}
 			logger.Error("не удалось инициализировать сервис", "error", err)
+
 			return 1
 		}
 	}
@@ -119,8 +128,10 @@ func runServe(run func(*App) error, _ []string, opts ...Option) int {
 
 	if err := runner.Run(ctx, app.server); err != nil {
 		logger.Error(options.ServiceName+" завершился с ошибкой", "error", err)
+
 		return 1
 	}
+
 	return 0
 }
 
@@ -155,6 +166,7 @@ func (a *App) LoggerFor(ctx context.Context) *slog.Logger {
 	if id := SpanIDFrom(ctx); id != "" {
 		attrs = append(attrs, "span_id", id)
 	}
+
 	return a.log.With(attrs...)
 }
 
@@ -235,6 +247,7 @@ func (a *App) handleReady(w http.ResponseWriter, r *http.Request) {
 			a.metrics.SetReady(a.opts.ServiceName, false)
 		}
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+
 		return
 	}
 	if a.metrics != nil {
