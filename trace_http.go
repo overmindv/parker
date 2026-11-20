@@ -20,6 +20,7 @@ func (t *traceRuntime) serverMiddleware(next http.Handler) http.Handler {
 		}
 		if t == nil {
 			next.ServeHTTP(w, r)
+
 			return
 		}
 		method := traceHTTPMethod(r.Method)
@@ -27,6 +28,7 @@ func (t *traceRuntime) serverMiddleware(next http.Handler) http.Handler {
 		r = r.WithContext(ctx)
 		if !span.IsRecording() {
 			next.ServeHTTP(w, r)
+
 			return
 		}
 		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
@@ -54,6 +56,7 @@ func traceRoute(pattern string) string {
 	if i := strings.IndexByte(pattern, '/'); i >= 0 && len(pattern)-i <= 128 {
 		return pattern[i:]
 	}
+
 	return ""
 }
 
@@ -73,6 +76,7 @@ func (a *App) TraceHTTPTransport(base http.RoundTripper) http.RoundTripper {
 	if base == nil {
 		base = http.DefaultTransport
 	}
+
 	return &traceTransport{base: base, tracing: a.tracing}
 }
 
@@ -86,6 +90,7 @@ func (t *traceTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 		// Не передаем трассу на адрес, выбранный чужим HTTP-ответом.
 		r = r.Clone(r.Context())
 		clearTraceHeaders(r.Header)
+
 		return t.base.RoundTrip(r)
 	}
 	ctx := r.Context()
@@ -114,6 +119,7 @@ func (t *traceTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 			span.SetStatus(codes.Error, "client_error")
 		}
 	}
+
 	return resp, err
 }
 

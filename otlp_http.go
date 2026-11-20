@@ -39,6 +39,7 @@ func newOTLPClient(endpoint *url.URL) *otlpClient {
 		ForceAttemptHTTP2:      true,
 		MaxResponseHeaderBytes: 16 << 10, MaxConnsPerHost: 2, MaxIdleConns: 2, IdleConnTimeout: 30 * time.Second,
 	}
+
 	return &otlpClient{
 		endpoint: endpoint.String(),
 		client: &http.Client{Transport: transport, Timeout: traceExportTimeout,
@@ -50,6 +51,7 @@ func (*otlpClient) Start(context.Context) error { return nil }
 
 func (c *otlpClient) Stop(context.Context) error {
 	c.client.CloseIdleConnections()
+
 	return nil
 }
 
@@ -86,5 +88,6 @@ func (c *otlpClient) UploadTraces(ctx context.Context, spans []*tracepb.Resource
 	if partial := reply.GetPartialSuccess(); partial.GetRejectedSpans() > 0 || partial.GetErrorMessage() != "" {
 		return errTracePartial
 	}
+
 	return nil
 }

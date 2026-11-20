@@ -34,10 +34,11 @@ func newCollectorFixture(t *testing.T) (string, *collectorFixture) {
 	t.Helper()
 	capture := &collectorFixture{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/traces" || r.Method != http.MethodPost ||
+		if r.URL.Path != traceExportPath || r.Method != http.MethodPost ||
 			r.Header.Get("Content-Type") != "application/x-protobuf" || r.Header.Get(TraceparentHeader) != "" {
 			t.Error("wrong OTLP/HTTP request")
 			w.WriteHeader(http.StatusBadRequest)
+
 			return
 		}
 		body, err := io.ReadAll(io.LimitReader(r.Body, maxOTLPRequest+1))
@@ -45,6 +46,7 @@ func newCollectorFixture(t *testing.T) (string, *collectorFixture) {
 		if err != nil || len(body) > maxOTLPRequest || proto.Unmarshal(body, &message) != nil {
 			t.Error("collector received invalid protobuf")
 			w.WriteHeader(http.StatusBadRequest)
+
 			return
 		}
 		capture.mu.Lock()
@@ -58,12 +60,14 @@ func newCollectorFixture(t *testing.T) (string, *collectorFixture) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	t.Cleanup(server.Close)
+
 	return server.URL, capture
 }
 
 func (c *collectorFixture) snapshot() ([]*tracepb.Span, []byte) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
 	return slices.Clone(c.spans), slices.Clone(c.wire)
 }
 
@@ -81,10 +85,13 @@ func tracedApp(t *testing.T, endpoint, service string, ratio float64) *App {
 	t.Cleanup(func() { tracing.shutdown(context.Background()) })
 	a := &App{opts: opts, log: log, health: NewHealthRegistry(), tracing: tracing}
 	a.initServer()
+
 	return a
 }
 
 func TestTraceHTTPExportsLinkedSpansWithoutRequestData(t *testing.T) {
+	t.Parallel()
+
 	endpoint, collector := newCollectorFixture(t)
 	a, b := tracedApp(t, endpoint, "frontend-fixture", 1), tracedApp(t, endpoint, "backend-fixture", 1)
 	const private = "private-user-field"
@@ -104,6 +111,7 @@ func TestTraceHTTPExportsLinkedSpansWithoutRequestData(t *testing.T) {
 			strings.NewReader(private))
 		if err != nil {
 			t.Error(err)
+
 			return
 		}
 		req.Header.Set("Baggage", "context="+private)
@@ -113,6 +121,7 @@ func TestTraceHTTPExportsLinkedSpansWithoutRequestData(t *testing.T) {
 		resp, err := client.Do(req)
 		if err != nil {
 			t.Error(err)
+
 			return
 		}
 		_ = resp.Body.Close()
@@ -157,6 +166,8 @@ func TestTraceHTTPExportsLinkedSpansWithoutRequestData(t *testing.T) {
 }
 
 func TestTraceHTTPDoesNotPropagateAfterRedirect(t *testing.T) {
+	t.Parallel()
+
 	var redirected atomic.Bool
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		redirected.Store(true)
@@ -197,10 +208,13 @@ func spanRoute(span *tracepb.Span) string {
 			return attr.GetValue().GetStringValue()
 		}
 	}
+
 	return ""
 }
 
 func TestTraceExporterHonorsSampling(t *testing.T) {
+	t.Parallel()
+
 	endpoint, collector := newCollectorFixture(t)
 	for _, tc := range []struct {
 		ratio  float64
@@ -223,6 +237,8 @@ func TestTraceExporterHonorsSampling(t *testing.T) {
 }
 
 func TestOTLPClientRejectsRedirectsAndOversizeReplies(t *testing.T) {
+	t.Parallel()
+
 	var leaked atomic.Bool
 	target := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { leaked.Store(true) }))
 	t.Cleanup(target.Close)
@@ -238,6 +254,7 @@ func TestOTLPClientRejectsRedirectsAndOversizeReplies(t *testing.T) {
 			})
 			if err != nil {
 				t.Error(err)
+
 				return
 			}
 			_, _ = w.Write(body)
@@ -261,6 +278,8 @@ func TestOTLPClientRejectsRedirectsAndOversizeReplies(t *testing.T) {
 }
 
 func TestTraceRunnerFlushHonorsShutdownDeadline(t *testing.T) {
+	t.Parallel()
+
 	started := make(chan struct{}, 1)
 	release := make(chan struct{})
 	collector := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
@@ -282,9 +301,13 @@ func TestTraceRunnerFlushHonorsShutdownDeadline(t *testing.T) {
 	r := NewRunner(a.log, budget)
 	r.afterShutdown = a.tracing.shutdown
 	ctx, cancel := context.WithCancel(t.Context())
-	r.AddRunnable("cancel", func(context.Context) error { cancel(); return nil })
+	r.AddRunnable("cancel", func(context.Context) error {
+		cancel()
+
+		return nil
+	})
 	start := time.Now()
-	server := &http.Server{Addr: "127.0.0.1:0", Handler: a.server.Handler}
+	server := &http.Server{Addr: "127.0.0.1:0", Handler: a.server.Handler, ReadHeaderTimeout: time.Second}
 	if err := r.Run(ctx, server); err != nil {
 		t.Fatal(err)
 	}
@@ -298,6 +321,7 @@ func TestTraceRunnerFlushHonorsShutdownDeadline(t *testing.T) {
 	}
 }
 
+//nolint:paralleltest // t.Setenv изменяет process-wide environment
 func TestTracingConfigRejectsSensitiveOrInsecureEndpoints(t *testing.T) {
 	for _, raw := range []string{
 		"http://collector.invalid:4318",
@@ -316,7 +340,7 @@ func TestTracingConfigRejectsSensitiveOrInsecureEndpoints(t *testing.T) {
 		t.Fatal("non-finite sampling ratio accepted")
 	}
 	valid, err := (TraceOptions{Endpoint: "https://collector.invalid", SampleRatio: 0.1}).collectorEndpoint("production", "test")
-	if err != nil || valid.Path != "/v1/traces" {
+	if err != nil || valid.Path != traceExportPath {
 		t.Fatal("secure endpoint rejected or missing default path", err)
 	}
 }

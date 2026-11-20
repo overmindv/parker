@@ -15,6 +15,8 @@ import (
 const traceFixture = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
 
 func TestParseTraceparent_Valid(t *testing.T) {
+	t.Parallel()
+
 	ctx := extractTraceparent(t.Context(), traceFixture)
 	if TraceparentFrom(ctx) != traceFixture || !trace.SpanContextFromContext(ctx).IsRemote() {
 		t.Fatal("valid W3C trace did not round-trip")
@@ -22,6 +24,8 @@ func TestParseTraceparent_Valid(t *testing.T) {
 }
 
 func TestParseTraceparent_Invalid(t *testing.T) {
+	t.Parallel()
+
 	cases := []string{
 		"",
 		"00-bad-span",
@@ -39,6 +43,8 @@ func TestParseTraceparent_Invalid(t *testing.T) {
 }
 
 func TestTraceMiddleware_SetsContext(t *testing.T) {
+	t.Parallel()
+
 	h := (*traceRuntime)(nil).serverMiddleware(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		if TraceIDFrom(r.Context()) != "4bf92f3577b34da6a3ce929d0e0e4736" || SpanIDFrom(r.Context()) != "00f067aa0ba902b7" {
 			t.Error("middleware did not propagate the parent context")
@@ -50,6 +56,8 @@ func TestTraceMiddleware_SetsContext(t *testing.T) {
 }
 
 func TestTraceMiddleware_NoHeaderNoop(t *testing.T) {
+	t.Parallel()
+
 	h := (*traceRuntime)(nil).serverMiddleware(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		if TraceIDFrom(r.Context()) != "" {
 			t.Error("missing or duplicate traceparent produced a parent")
@@ -63,6 +71,8 @@ func TestTraceMiddleware_NoHeaderNoop(t *testing.T) {
 }
 
 func TestApp_LoggerForAddsTraceFields(t *testing.T) {
+	t.Parallel()
+
 	var logs bytes.Buffer
 	app := &App{log: bufferLogger(&logs)}
 	ctx := extractTraceparent(withRequestID(context.Background(), "req-9"), traceFixture)
@@ -75,6 +85,8 @@ func TestApp_LoggerForAddsTraceFields(t *testing.T) {
 }
 
 func TestKafkaTraceReplacesDuplicateHeaders(t *testing.T) {
+	t.Parallel()
+
 	ctx := t.Context()
 	parent := extractTraceparent(ctx, traceFixture)
 	record := &kgo.Record{Headers: []kgo.RecordHeader{
