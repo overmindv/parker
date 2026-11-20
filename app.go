@@ -26,6 +26,7 @@ type App struct {
 	health    *HealthRegistry
 	mux       *http.ServeMux
 	metrics   *Metrics
+	tracing   *traceRuntime
 	server    *http.Server
 	runnables []namedRunnable
 
@@ -83,12 +84,20 @@ func runServe(run func(*App) error, _ []string, opts ...Option) int {
 		return 1
 	}
 
-	app := &App{opts: options, log: logger, health: NewHealthRegistry()}
+	tracing, err := newTraceRuntime(options, logger)
+	if err != nil {
+		logFatal(err)
+		return 1
+	}
+	app := &App{opts: options, log: logger, health: NewHealthRegistry(), tracing: tracing}
 	app.initServer()
 	defer app.closeAll()
 
 	if run != nil {
 		if err := run(app); err != nil {
+			if tracing != nil {
+				tracing.shutdown(context.Background())
+			}
 			logger.Error("не удалось инициализировать сервис", "error", err)
 			return 1
 		}
@@ -98,6 +107,9 @@ func runServe(run func(*App) error, _ []string, opts ...Option) int {
 	defer stop()
 
 	runner := NewRunner(logger, options.ShutdownTimeout)
+	if tracing != nil {
+		runner.afterShutdown = tracing.shutdown
+	}
 	for _, rn := range app.runnables {
 		runner.AddRunnable(rn.name, rn.fn)
 	}
@@ -184,7 +196,7 @@ func (a *App) initServer() {
 		handler = a.metrics.middleware(a.opts.ServiceName)(handler)
 	}
 	handler = accessLogMiddleware(a.log)(handler)
-	handler = traceMiddleware(handler)
+	handler = a.tracing.serverMiddleware(handler)
 	handler = requestIDMiddleware(handler)
 	handler = recoverMiddleware(a.log)(handler)
 

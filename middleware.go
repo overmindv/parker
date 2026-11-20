@@ -8,17 +8,14 @@ import (
 	"log/slog"
 	"net/http"
 	"runtime/debug"
-	"strings"
 	"time"
+
+	"go.opentelemetry.io/otel/trace"
 )
 
 type contextKey uint8
 
-const (
-	ctxKeyRequestID contextKey = iota
-	ctxKeyTraceID
-	ctxKeySpanID
-)
+const ctxKeyRequestID contextKey = iota
 
 // RequestHeader — заголовок, из которого берётся/в который кладётся request_id.
 const RequestHeader = "X-Request-ID"
@@ -40,16 +37,16 @@ func withRequestID(ctx context.Context, id string) context.Context {
 
 // TraceIDFrom возвращает trace_id из контекста (пусто, если не задан).
 func TraceIDFrom(ctx context.Context) string {
-	if id, ok := ctx.Value(ctxKeyTraceID).(string); ok {
-		return id
+	if id := trace.SpanContextFromContext(ctx).TraceID(); id.IsValid() {
+		return id.String()
 	}
 	return ""
 }
 
 // SpanIDFrom возвращает span_id из контекста (пусто, если не задан).
 func SpanIDFrom(ctx context.Context) string {
-	if id, ok := ctx.Value(ctxKeySpanID).(string); ok {
-		return id
+	if id := trace.SpanContextFromContext(ctx).SpanID(); id.IsValid() {
+		return id.String()
 	}
 	return ""
 }
@@ -97,50 +94,6 @@ func newRequestID() string {
 	return hex.EncodeToString(b[:])
 }
 
-// traceMiddleware разбирает W3C traceparent и кладёт trace_id/span_id в контекст
-// (для дальнейшей трассировки и полей логов). Не генерирует новый trace — только
-// пробрасывает входящий; генерация/экспорт — задача будущего OTel-интегратора.
-func traceMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ctx := r.Context()
-		if traceID, spanID, ok := parseTraceparent(r.Header.Get(TraceparentHeader)); ok {
-			ctx = context.WithValue(ctx, ctxKeyTraceID, traceID)
-			ctx = context.WithValue(ctx, ctxKeySpanID, spanID)
-			r = r.WithContext(ctx)
-		}
-		next.ServeHTTP(w, r)
-	})
-}
-
-// parseTraceparent разбирает W3C traceparent: "version-traceid-spanid-flags".
-func parseTraceparent(value string) (traceID, spanID string, ok bool) {
-	parts := strings.Split(value, "-")
-	if len(parts) != 4 {
-		return "", "", false
-	}
-	if parts[0] != "00" { // version (пока поддерживается только 00)
-		return "", "", false
-	}
-	if len(parts[1]) != 32 || !isHex(parts[1]) { // trace-id
-		return "", "", false
-	}
-	if len(parts[2]) != 16 || !isHex(parts[2]) { // span-id
-		return "", "", false
-	}
-	return parts[1], parts[2], true
-}
-
-// isHex проверяет, что строка состоит только из hex-цифр.
-func isHex(s string) bool {
-	for _, r := range s {
-		ok := (r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F')
-		if !ok {
-			return false
-		}
-	}
-	return true
-}
-
 // accessLogMiddleware логирует метод/путь/статус/длительность без тела запроса.
 // Оборачивается вокруг recorder'а, чтобы знать фактический код ответа.
 func accessLogMiddleware(log *slog.Logger) func(http.Handler) http.Handler {
@@ -169,6 +122,8 @@ type statusRecorder struct {
 	status      int
 	wroteHeader bool
 }
+
+func (r *statusRecorder) Unwrap() http.ResponseWriter { return r.ResponseWriter }
 
 func (r *statusRecorder) WriteHeader(code int) {
 	if !r.wroteHeader {

@@ -7,12 +7,14 @@ import (
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kgo"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // Producer — тонкая обёртка над franz-go клиентом для публикации записей.
 // Реализует HealthCheck (Ping) для /ready.
 type Producer struct {
-	client *kgo.Client
+	client  *kgo.Client
+	tracing *traceRuntime
 }
 
 // NewProducer создаёт producer к заданным брокерам.
@@ -35,8 +37,15 @@ func NewProducer(brokers []string, security ...KafkaSecurity) (*Producer, error)
 // Publish публикует запись в топик с ключом (обеспечивает порядок в partition).
 func (p *Producer) Publish(ctx context.Context, topic, key string, value []byte) error {
 	rec := &kgo.Record{Topic: topic, Key: []byte(key), Value: value}
+	var span trace.Span
+	if p.tracing != nil {
+		ctx, span = p.tracing.kafkaSpan(ctx, "send", trace.SpanKindProducer)
+		defer span.End()
+	}
+	InjectKafkaTrace(ctx, rec)
 	result := p.client.ProduceSync(ctx, rec)
 	if err := result.FirstErr(); err != nil {
+		markKafkaError(span, "publish_failed")
 		return fmt.Errorf("kafka publish %s: %w", topic, err)
 	}
 	return nil
@@ -82,6 +91,7 @@ type Subscriber struct {
 	client  subscriberClient
 	log     *slog.Logger
 	handler Handler
+	tracing *traceRuntime
 }
 
 // NewSubscriber создаёт consumer-group подписчика.
@@ -140,17 +150,32 @@ func (s *Subscriber) processFetch(ctx context.Context, fetches kgo.Fetches) erro
 		rec := iter.Next()
 		// Ограниченный бюджет меньше rebalance timeout; handler обязан соблюдать ctx.
 		recordCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-		handlerCtx := context.WithValue(recordCtx, positionKey{}, RecordPosition{
-			Topic: rec.Topic, Partition: rec.Partition, Offset: rec.Offset,
-		})
-		err := s.handleRecord(handlerCtx, rec)
-		if err == nil {
-			err = s.client.CommitRecords(recordCtx, rec)
-		}
+		err := s.processRecord(recordCtx, rec)
 		cancel()
 		if err != nil {
 			return fmt.Errorf("kafka record failed topic=%s partition=%d offset=%d: %w", rec.Topic, rec.Partition, rec.Offset, err)
 		}
+	}
+	return nil
+}
+
+func (s *Subscriber) processRecord(ctx context.Context, rec *kgo.Record) error {
+	ctx = ExtractKafkaTrace(ctx, rec)
+	var span trace.Span
+	if s.tracing != nil {
+		ctx, span = s.tracing.kafkaSpan(ctx, "process", trace.SpanKindConsumer)
+		defer span.End()
+	}
+	handlerCtx := context.WithValue(ctx, positionKey{}, RecordPosition{
+		Topic: rec.Topic, Partition: rec.Partition, Offset: rec.Offset,
+	})
+	if err := s.handleRecord(handlerCtx, rec); err != nil {
+		markKafkaError(span, "handler_failed")
+		return err
+	}
+	if err := s.client.CommitRecords(ctx, rec); err != nil {
+		markKafkaError(span, "commit_failed")
+		return err
 	}
 	return nil
 }
@@ -190,6 +215,7 @@ func (a *App) NewProducer() (*Producer, error) {
 	if err != nil {
 		return nil, err
 	}
+	p.tracing = a.tracing
 	a.trackCloser(p.Close)
 	return p, nil
 }
@@ -200,6 +226,7 @@ func (a *App) NewSubscriber(group string, topics []string, handler Handler) (*Su
 	if err != nil {
 		return nil, err
 	}
+	s.tracing = a.tracing
 	a.trackCloser(s.Close)
 	return s, nil
 }

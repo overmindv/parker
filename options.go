@@ -31,6 +31,13 @@ type Options struct {
 	// Observability.
 	MetricsEnabled bool // METRICS_ENABLED
 	PprofEnabled   bool // PPROF_ENABLED
+	Tracing        TraceOptions
+}
+
+// TraceOptions настраивает экспорт трасс. Пустой Endpoint отключает экспорт.
+type TraceOptions struct {
+	Endpoint    string  // PARKER_OTLP_TRACE_ENDPOINT
+	SampleRatio float64 // PARKER_TRACE_SAMPLE_RATIO
 }
 
 // Option — функция-модификатор Options для Main(run, opts...).
@@ -54,6 +61,7 @@ func DefaultOptions() Options {
 		MigrationsDir:   "migrations",
 		MetricsEnabled:  true,
 		PprofEnabled:    false,
+		Tracing:         TraceOptions{SampleRatio: 0.1},
 	}
 }
 
