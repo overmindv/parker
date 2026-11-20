@@ -15,6 +15,7 @@ func (h *traceHeader) Get(key string) string {
 	if key == TraceparentHeader {
 		return h.value
 	}
+
 	return ""
 }
 
@@ -30,6 +31,7 @@ func extractTraceparent(ctx context.Context, parent string) context.Context {
 	if len(parent) != 55 || !strings.HasPrefix(parent, "00-") {
 		return ctx
 	}
+
 	return propagation.TraceContext{}.Extract(ctx, &traceHeader{value: parent})
 }
 
@@ -37,6 +39,7 @@ func extractTraceparent(ctx context.Context, parent string) context.Context {
 func TraceparentFrom(ctx context.Context) string {
 	var header traceHeader
 	propagation.TraceContext{}.Inject(ctx, &header)
+
 	return header.value
 }
 
@@ -57,6 +60,7 @@ func ExtractKafkaTrace(ctx context.Context, record *kgo.Record) context.Context 
 	if parent == nil {
 		return ctx
 	}
+
 	return extractTraceparent(ctx, string(parent))
 }
 

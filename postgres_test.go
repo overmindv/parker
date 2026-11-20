@@ -10,6 +10,7 @@ import (
 )
 
 func TestOpenPool_Ping(t *testing.T) {
+
 	dsn := testDSN(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -26,6 +27,7 @@ func TestOpenPool_Ping(t *testing.T) {
 }
 
 func TestOpenPool_BadDSN(t *testing.T) {
+
 	ctx := context.Background()
 	if _, err := OpenPool(ctx, "postgres://user:pass@127.0.0.1:1/none?sslmode=disable"); err == nil {
 		t.Fatal("ожидалась ошибка при недоступной БД")
@@ -33,6 +35,7 @@ func TestOpenPool_BadDSN(t *testing.T) {
 }
 
 func TestApp_PostgresRegistersHealthAndReady(t *testing.T) {
+
 	dsn := testDSN(t)
 	app := newTestApp()
 	app.opts.DatabaseURL = dsn

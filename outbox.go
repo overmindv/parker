@@ -85,6 +85,7 @@ func NewOutboxDispatcher(outbox Outbox, producer *Producer, poll time.Duration, 
 	if len(metrics) > 0 {
 		d.metrics = metrics[0]
 	}
+
 	return d
 }
 
@@ -96,6 +97,7 @@ func newOutboxDispatcher(outbox Outbox, producer publisher, poll time.Duration, 
 	if batch <= 0 || batch > 100 {
 		batch = 100
 	}
+
 	return &OutboxDispatcher{
 		outbox:   outbox,
 		producer: producer,
@@ -137,6 +139,7 @@ func (d *OutboxDispatcher) flushOnce(ctx context.Context) {
 	records, err := d.outbox.FetchPending(ctx, d.batch)
 	if err != nil {
 		d.log.Warn("outbox: не удалось получить записи", "error", err)
+
 		return
 	}
 	if len(records) == 0 {
@@ -170,6 +173,7 @@ func (d *OutboxDispatcher) flushOnce(ctx context.Context) {
 					d.log.Warn("outbox reschedule failed", "id", rec.ID)
 				}
 			}
+
 			continue
 		}
 		if leased, ok := d.outbox.(claimedOutbox); ok {
@@ -223,6 +227,7 @@ func (o *PgOutbox) FetchPending(ctx context.Context, limit int) ([]OutboxRecord,
 		}
 		records = append(records, rec)
 	}
+
 	return records, rows.Err()
 }
 
@@ -236,6 +241,7 @@ func (o *PgOutbox) MarkClaimSent(ctx context.Context, rec OutboxRecord) error {
 	if tag.RowsAffected() != 1 {
 		return fmt.Errorf("outbox claim lost")
 	}
+
 	return nil
 }
 
@@ -254,5 +260,6 @@ func (o *PgOutbox) MarkSent(ctx context.Context, ids []string) error {
 	if tag.RowsAffected() != int64(len(ids)) {
 		return fmt.Errorf("outbox requires claim acknowledgement")
 	}
+
 	return nil
 }

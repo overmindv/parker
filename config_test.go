@@ -6,6 +6,7 @@ import (
 	"time"
 )
 
+//nolint:paralleltest // t.Setenv изменяет process-wide environment
 func TestEnv_EmptyUsesFallback(t *testing.T) {
 	t.Setenv("PARKER_TEST_ENV_1", "")
 	if got := Env("PARKER_TEST_ENV_1", "fallback"); got != "fallback" {
@@ -18,6 +19,7 @@ func TestEnv_EmptyUsesFallback(t *testing.T) {
 	}
 }
 
+//nolint:paralleltest // t.Setenv изменяет process-wide environment
 func TestEnvList_DedupAndTrim(t *testing.T) {
 	t.Setenv("PARKER_TEST_LIST", " a,b ,a,,c ")
 	got := EnvList("PARKER_TEST_LIST", "x")
@@ -32,6 +34,7 @@ func TestEnvList_DedupAndTrim(t *testing.T) {
 	}
 }
 
+//nolint:paralleltest // t.Setenv изменяет process-wide environment
 func TestEnvDuration(t *testing.T) {
 	t.Setenv("PARKER_TEST_DUR", "5s")
 	got, err := EnvDuration("PARKER_TEST_DUR", time.Second)
@@ -48,6 +51,7 @@ func TestEnvDuration(t *testing.T) {
 	}
 }
 
+//nolint:paralleltest // t.Setenv изменяет process-wide environment
 func TestEnvInt64(t *testing.T) {
 	t.Setenv("PARKER_TEST_INT", "42")
 	got, err := EnvInt64("PARKER_TEST_INT", 0)
@@ -61,6 +65,7 @@ func TestEnvInt64(t *testing.T) {
 	}
 }
 
+//nolint:paralleltest // t.Setenv изменяет process-wide environment
 func TestLoad_Defaults(t *testing.T) {
 	// Чистое окружение parker-переменных не требуется: Load применяет DEFAULT_VALUE.
 	// Сбрасываем привязанные env-переменные, чтобы не зависеть от окружения машины.
@@ -85,6 +90,7 @@ func TestLoad_Defaults(t *testing.T) {
 	}
 }
 
+//nolint:paralleltest // t.Setenv изменяет process-wide environment
 func TestLoad_InvalidLogLevel(t *testing.T) {
 	t.Setenv("LOG_LEVEL", "bogus")
 	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "LOG_LEVEL") {
@@ -92,6 +98,7 @@ func TestLoad_InvalidLogLevel(t *testing.T) {
 	}
 }
 
+//nolint:paralleltest // t.Setenv изменяет process-wide environment
 func TestLoad_InvalidTimeout(t *testing.T) {
 	t.Setenv("READ_TIMEOUT", "0s")
 	if _, err := Load(); err == nil {
@@ -100,6 +107,8 @@ func TestLoad_InvalidTimeout(t *testing.T) {
 }
 
 func TestValidate_InvalidDatabaseURL(t *testing.T) {
+	t.Parallel()
+
 	opts := DefaultOptions()
 	opts.DatabaseURL = "mysql://user:pass@localhost/db"
 	if err := opts.Validate(); err == nil {

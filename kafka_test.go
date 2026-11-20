@@ -21,8 +21,10 @@ func (c *prefixClient) PollRecords(ctx context.Context, n int) kgo.Fetches {
 	c.polls++
 	if c.polls > 1 {
 		c.cancel()
+
 		return nil
 	}
+
 	return kgo.Fetches{{Topics: []kgo.FetchTopic{{Topic: "t", Partitions: []kgo.FetchPartition{{Partition: 0, Records: []*kgo.Record{{Topic: "t", Offset: 0}, {Topic: "t", Offset: 1}}}}}}}}
 }
 func (c *prefixClient) CommitRecords(_ context.Context, r ...*kgo.Record) error {
@@ -32,17 +34,24 @@ func (c *prefixClient) CommitRecords(_ context.Context, r ...*kgo.Record) error 
 	for _, v := range r {
 		c.committed = append(c.committed, v.Offset)
 	}
+
 	return nil
 }
 func (c *prefixClient) AllowRebalance()            { c.allows++ }
 func (c *prefixClient) Ping(context.Context) error { return nil }
 func (c *prefixClient) Close()                     {}
 func TestSubscriberFailedPrefixStopsBatch(t *testing.T) {
+	t.Parallel()
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	c := &prefixClient{cancel: cancel}
 	calls := 0
-	s := &Subscriber{client: c, log: slog.New(slog.NewTextHandler(io.Discard, nil)), handler: func(context.Context, string, []byte) error { calls++; return errors.New("failed") }}
+	s := &Subscriber{client: c, log: slog.New(slog.NewTextHandler(io.Discard, nil)), handler: func(context.Context, string, []byte) error {
+		calls++
+
+		return errors.New("failed")
+	}}
 	if err := s.Run(ctx); err == nil {
 		t.Fatal("expected exhausted retry")
 	}
@@ -51,6 +60,8 @@ func TestSubscriberFailedPrefixStopsBatch(t *testing.T) {
 	}
 }
 func TestSubscriberRetriesCurrentBeforeNext(t *testing.T) {
+	t.Parallel()
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	c := &prefixClient{cancel: cancel}
@@ -60,6 +71,7 @@ func TestSubscriberRetriesCurrentBeforeNext(t *testing.T) {
 		if calls == 1 {
 			return errors.New("first")
 		}
+
 		return nil
 	}}
 	if err := s.Run(ctx); err != nil {
@@ -70,11 +82,17 @@ func TestSubscriberRetriesCurrentBeforeNext(t *testing.T) {
 	}
 }
 func TestSubscriberCommitFailureStopsBatch(t *testing.T) {
+	t.Parallel()
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	c := &prefixClient{cancel: cancel, failCommit: true}
 	calls := 0
-	s := &Subscriber{client: c, log: slog.New(slog.NewTextHandler(io.Discard, nil)), handler: func(context.Context, string, []byte) error { calls++; return nil }}
+	s := &Subscriber{client: c, log: slog.New(slog.NewTextHandler(io.Discard, nil)), handler: func(context.Context, string, []byte) error {
+		calls++
+
+		return nil
+	}}
 	if err := s.Run(ctx); err == nil {
 		t.Fatal("ignored commit failure")
 	}
@@ -84,6 +102,8 @@ func TestSubscriberCommitFailureStopsBatch(t *testing.T) {
 }
 
 func TestSubscriberBlocksRebalanceWhileProcessing(t *testing.T) {
+	t.Parallel()
+
 	s, err := NewSubscriber([]string{"localhost:1"}, "g", []string{"t"}, func(context.Context, string, []byte) error { return nil }, discardLog())
 	if err != nil {
 		t.Fatal(err)

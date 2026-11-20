@@ -34,9 +34,11 @@ func runMigrateCLI(args []string) int {
 
 	if err := RunMigrate(dir, dsn, command); err != nil {
 		fmt.Fprintf(os.Stderr, "parker: migrate: %v\n", err)
+
 		return 1
 	}
 	fmt.Fprintf(os.Stderr, "parker: migrate %s %q ok\n", command, dir)
+
 	return 0
 }
 
@@ -68,16 +70,19 @@ func runInitCLI(args []string) int {
 
 	if name == "" {
 		fmt.Fprintln(os.Stderr, "parker: init: укажите имя сервиса, например: parker init <service-name> [--pg] [--kafka]")
+
 		return 2
 	}
 
 	if err := GenerateService(".", name, hasPG, hasKafka); err != nil {
 		fmt.Fprintf(os.Stderr, "parker: init: %v\n", err)
+
 		return 1
 	}
 
 	fmt.Fprintf(os.Stderr, "parker: init %q: каркас создан в текущем каталоге\n", name)
 	PrintComposeBlock(os.Stdout, name, hasPG, hasKafka)
 	PrintPostInitChecklist(os.Stdout, name)
+
 	return 0
 }

@@ -11,6 +11,7 @@ import (
 )
 
 func TestGeneratedServiceBuildsWithoutSibling(t *testing.T) {
+
 	for _, pg := range []bool{false, true} {
 		dir := t.TempDir()
 		if err := GenerateService(dir, "isolated", pg, false); err != nil {

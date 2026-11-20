@@ -72,5 +72,6 @@ func (o Options) Apply(opts []Option) Options {
 			opt(&o)
 		}
 	}
+
 	return o
 }

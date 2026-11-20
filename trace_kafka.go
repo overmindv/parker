@@ -14,6 +14,7 @@ func (t *traceRuntime) kafkaSpan(ctx context.Context, operation string, kind tra
 		span.SetAttributes(attribute.String("messaging.system.name", "kafka"),
 			attribute.String("messaging.operation.type", operation))
 	}
+
 	return ctx, span
 }
 

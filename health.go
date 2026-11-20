@@ -42,6 +42,7 @@ func (h *HealthRegistry) Add(name string, c HealthCheck) {
 func (h *HealthRegistry) Enabled() bool {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
+
 	return h.enabled
 }
 

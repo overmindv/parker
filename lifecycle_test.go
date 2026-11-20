@@ -15,6 +15,8 @@ func discardLogger() *slog.Logger {
 }
 
 func TestRunner_GracefulShutdownOnCancel(t *testing.T) {
+	t.Parallel()
+
 	runner := NewRunner(discardLogger(), time.Second)
 
 	started := make(chan struct{})
@@ -23,10 +25,11 @@ func TestRunner_GracefulShutdownOnCancel(t *testing.T) {
 		close(started)
 		<-ctx.Done()
 		close(stopped)
+
 		return nil
 	})
 
-	server := &http.Server{Addr: "127.0.0.1:0", Handler: http.NewServeMux()}
+	server := &http.Server{Addr: "127.0.0.1:0", Handler: http.NewServeMux(), ReadHeaderTimeout: time.Second}
 	ctx, cancel := context.WithCancel(context.Background())
 
 	done := make(chan error, 1)
@@ -52,10 +55,12 @@ func TestRunner_GracefulShutdownOnCancel(t *testing.T) {
 }
 
 func TestRunner_FatalRunnableStopsApp(t *testing.T) {
+	t.Parallel()
+
 	runner := NewRunner(discardLogger(), time.Second)
 	runner.AddRunnable("bad", func(context.Context) error { return errors.New("boom") })
 
-	server := &http.Server{Addr: "127.0.0.1:0", Handler: http.NewServeMux()}
+	server := &http.Server{Addr: "127.0.0.1:0", Handler: http.NewServeMux(), ReadHeaderTimeout: time.Second}
 	ctx := context.Background()
 
 	runDone := make(chan error, 1)

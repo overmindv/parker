@@ -18,12 +18,14 @@ var migrateCommands = map[string]func(db *sql.DB, dir string) error{
 		if err := goose.Up(db, dir); err != nil {
 			return fmt.Errorf("up: %w", err)
 		}
+
 		return nil
 	},
 	"down": func(db *sql.DB, dir string) error {
 		if err := goose.Down(db, dir); err != nil {
 			return fmt.Errorf("down: %w", err)
 		}
+
 		return nil
 	},
 	"status": func(db *sql.DB, dir string) error {
@@ -45,7 +47,7 @@ func RunMigrate(dir, dsn, command string) error {
 	if !ok {
 		return fmt.Errorf("недопустимая команда миграций %q: ожидается up, down или status", command)
 	}
-	if _, err := os.Stat(dir); err != nil {
+	if _, err := os.Stat(dir); err != nil { //nolint:gosec // каталог задаёт доверенный оператор CLI/сервиса
 		return fmt.Errorf("каталог миграций: %w", err)
 	}
 
@@ -62,5 +64,6 @@ func RunMigrate(dir, dsn, command string) error {
 	if err := goose.SetDialect("postgres"); err != nil {
 		return fmt.Errorf("goose dialect: %w", err)
 	}
+
 	return fn(db, dir)
 }

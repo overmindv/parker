@@ -17,11 +17,13 @@ type fakeOutbox struct {
 
 func (f *fakeOutbox) FetchPending(_ context.Context, limit int) ([]OutboxRecord, error) {
 	f.limit = limit
+
 	return f.pending, nil
 }
 
 func (f *fakeOutbox) MarkSent(_ context.Context, ids []string) error {
 	f.sent = append(f.sent, ids...)
+
 	return nil
 }
 
@@ -35,6 +37,7 @@ func (f *fakePublisher) Publish(_ context.Context, topic, key string, _ []byte) 
 		return errors.New("publish failed")
 	}
 	f.published = append(f.published, key)
+
 	return nil
 }
 
@@ -43,6 +46,8 @@ func discardLog() *slog.Logger {
 }
 
 func TestOutboxDispatcher_FlushPublishesAndMarks(t *testing.T) {
+	t.Parallel()
+
 	outbox := &fakeOutbox{pending: []OutboxRecord{
 		{ID: "1", Topic: "t", Key: "k1"},
 		{ID: "2", Topic: "t", Key: "k2"},
@@ -61,6 +66,8 @@ func TestOutboxDispatcher_FlushPublishesAndMarks(t *testing.T) {
 }
 
 func TestOutboxDispatcher_PublishFailureNotMarked(t *testing.T) {
+	t.Parallel()
+
 	outbox := &fakeOutbox{pending: []OutboxRecord{
 		{ID: "1", Topic: "bad", Key: "k1"},
 		{ID: "2", Topic: "good", Key: "k2"},
@@ -80,6 +87,8 @@ func TestOutboxDispatcher_PublishFailureNotMarked(t *testing.T) {
 }
 
 func TestOutboxDispatcher_EmptyNoOp(t *testing.T) {
+	t.Parallel()
+
 	outbox := &fakeOutbox{}
 	pub := &fakePublisher{}
 	d := newOutboxDispatcher(outbox, pub, 0, 100, discardLog())
@@ -94,15 +103,19 @@ type budgetPublisher struct{ healthy bool }
 func (p *budgetPublisher) Publish(ctx context.Context, topic, key string, value []byte) error {
 	if topic == "slow" {
 		<-ctx.Done()
+
 		return ctx.Err()
 	}
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
 	p.healthy = true
+
 	return nil
 }
 func TestOutboxSlowRecordDoesNotConsumeBatchLease(t *testing.T) {
+	t.Parallel()
+
 	deadline := time.Now().Add(200 * time.Millisecond)
 	outbox := &fakeOutbox{pending: []OutboxRecord{{ID: "1", Topic: "slow", LeaseUntil: deadline}, {ID: "2", Topic: "healthy", LeaseUntil: deadline}}}
 	pub := &budgetPublisher{}

@@ -20,6 +20,7 @@ import (
 )
 
 func TestKafkaTraceHTTPToBrokerAndHandler(t *testing.T) {
+
 	broker := os.Getenv("PARKER_TEST_KAFKA")
 	if broker == "" {
 		t.Skip("PARKER_TEST_KAFKA must point to a dedicated broker")

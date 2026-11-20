@@ -7,6 +7,8 @@ import (
 )
 
 func TestSubscriberPreservesPositionOnRetry(t *testing.T) {
+	t.Parallel()
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	if _, ok := PositionFromContext(ctx); ok {
@@ -27,6 +29,7 @@ func TestSubscriberPreservesPositionOnRetry(t *testing.T) {
 		if len(got) == 1 {
 			return errors.New("try again")
 		}
+
 		return nil
 	}}
 

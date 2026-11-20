@@ -44,6 +44,7 @@ func columnExists(t *testing.T, dsn, table, column string) bool {
 }
 
 func TestRunMigrate_UpStatus(t *testing.T) {
+
 	dsn := testDSN(t)
 	dir := t.TempDir()
 	writeMigration(t, dir, "0001_init.sql",
@@ -81,6 +82,7 @@ func TestRunMigrate_UpStatus(t *testing.T) {
 }
 
 func TestRunMigrate_Errors(t *testing.T) {
+
 	dsn := testDSN(t)
 	if err := RunMigrate(t.TempDir(), "", "up"); err == nil {
 		t.Fatal("ожидалась ошибка при пустом DSN")

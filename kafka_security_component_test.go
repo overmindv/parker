@@ -12,6 +12,7 @@ import (
 )
 
 func TestAuthenticatedKafka(t *testing.T) {
+
 	broker := os.Getenv("PARKER_SECURE_KAFKA")
 	if broker == "" {
 		t.Skip("secure Kafka fixture required")

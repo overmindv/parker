@@ -32,6 +32,7 @@ func ValidateServiceName(name string) error {
 	if !serviceNameRe.MatchString(name) {
 		return fmt.Errorf("недопустимое имя сервиса %q: строчные латинские буквы, цифры и '-', 1–40 символов, начинается с буквы или цифры", name)
 	}
+
 	return nil
 }
 
@@ -46,7 +47,7 @@ func GenerateService(dir, name string, hasPG, hasKafka bool) error {
 		HasPG:       hasPG,
 		HasKafka:    hasKafka,
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o755); err != nil { //nolint:gosec // сгенерированный проект должен быть доступен локальным инструментам
 		return err
 	}
 
@@ -76,6 +77,7 @@ func GenerateService(dir, name string, hasPG, hasKafka bool) error {
 	if err := generateInternalSkeleton(dir, name); err != nil {
 		return err
 	}
+
 	return nil
 }
 
@@ -89,11 +91,11 @@ func renderServiceFile(data serviceData, tmplPath, outPath string) error {
 		return err
 	}
 	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, data); err != nil {
-		return err
+	if executeErr := tmpl.Execute(&buf, data); executeErr != nil {
+		return executeErr
 	}
-	if err := os.MkdirAll(filepath.Dir(outPath), 0o755); err != nil {
-		return err
+	if mkdirErr := os.MkdirAll(filepath.Dir(outPath), 0o755); mkdirErr != nil { //nolint:gosec // каталоги исходников имеют стандартные права 0755
+		return mkdirErr
 	}
 	content := buf.Bytes()
 	if strings.HasSuffix(outPath, ".go") {
@@ -102,7 +104,8 @@ func renderServiceFile(data serviceData, tmplPath, outPath string) error {
 			return err
 		}
 	}
-	return os.WriteFile(outPath, content, 0o644)
+
+	return os.WriteFile(outPath, content, 0o644) //nolint:gosec // исходники и документация не содержат секретов
 }
 
 // generateInternalSkeleton создаёт структуру каталогов бизнес-логики с подсказками.
@@ -118,14 +121,15 @@ func generateInternalSkeleton(dir, name string) error {
 	}
 	for _, p := range places {
 		pdir := filepath.Join(base, p.rel)
-		if err := os.MkdirAll(pdir, 0o755); err != nil {
+		if err := os.MkdirAll(pdir, 0o755); err != nil { //nolint:gosec // каталоги исходников имеют стандартные права 0755
 			return err
 		}
 		readme := "# " + name + "/" + p.rel + "\n\n" + p.hint + "\n"
-		if err := os.WriteFile(filepath.Join(pdir, "README.md"), []byte(readme), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(pdir, "README.md"), []byte(readme), 0o644); err != nil { //nolint:gosec // README не содержит секретов
 			return err
 		}
 	}
+
 	return nil
 }
 
