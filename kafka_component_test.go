@@ -18,6 +18,7 @@ import (
 
 // Реальный broker: неуспешный consumer уходит, новый member получает тот же offset.
 func TestKafkaFailedRecordSurvivesNewMember(t *testing.T) {
+
 	broker := os.Getenv("PARKER_TEST_KAFKA")
 	if broker == "" {
 		t.Skip("PARKER_TEST_KAFKA required")
@@ -66,6 +67,7 @@ func TestKafkaFailedRecordSurvivesNewMember(t *testing.T) {
 }
 
 func TestKafkaRebalanceWaitsForInFlightHandler(t *testing.T) {
+
 	broker := os.Getenv("PARKER_TEST_KAFKA")
 	if broker == "" {
 		t.Skip("PARKER_TEST_KAFKA required")

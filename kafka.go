@@ -31,6 +31,7 @@ func NewProducer(brokers []string, security ...KafkaSecurity) (*Producer, error)
 	if err != nil {
 		return nil, fmt.Errorf("создать kafka producer: %w", err)
 	}
+
 	return &Producer{client: client}, nil
 }
 
@@ -46,8 +47,10 @@ func (p *Producer) Publish(ctx context.Context, topic, key string, value []byte)
 	result := p.client.ProduceSync(ctx, rec)
 	if err := result.FirstErr(); err != nil {
 		markKafkaError(span, "publish_failed")
+
 		return fmt.Errorf("kafka publish %s: %w", topic, err)
 	}
+
 	return nil
 }
 
@@ -74,6 +77,7 @@ type positionKey struct{}
 // PositionFromContext возвращает координаты записи внутри вызова Handler.
 func PositionFromContext(ctx context.Context) (RecordPosition, bool) {
 	position, ok := ctx.Value(positionKey{}).(RecordPosition)
+
 	return position, ok
 }
 
@@ -117,6 +121,7 @@ func NewSubscriber(brokers []string, group string, topics []string, handler Hand
 	if err != nil {
 		return nil, fmt.Errorf("создать kafka consumer: %w", err)
 	}
+
 	return &Subscriber{client: client, log: log, handler: handler}, nil
 }
 
@@ -126,6 +131,7 @@ func (s *Subscriber) Run(ctx context.Context) error {
 		fetches := s.client.PollRecords(ctx, 1)
 		if ctx.Err() != nil {
 			s.client.AllowRebalance()
+
 			return nil
 		}
 		if len(fetches.Errors()) > 0 {
@@ -156,6 +162,7 @@ func (s *Subscriber) processFetch(ctx context.Context, fetches kgo.Fetches) erro
 			return fmt.Errorf("kafka record failed topic=%s partition=%d offset=%d: %w", rec.Topic, rec.Partition, rec.Offset, err)
 		}
 	}
+
 	return nil
 }
 
@@ -171,12 +178,15 @@ func (s *Subscriber) processRecord(ctx context.Context, rec *kgo.Record) error {
 	})
 	if err := s.handleRecord(handlerCtx, rec); err != nil {
 		markKafkaError(span, "handler_failed")
+
 		return err
 	}
 	if err := s.client.CommitRecords(ctx, rec); err != nil {
 		markKafkaError(span, "commit_failed")
+
 		return err
 	}
+
 	return nil
 }
 
@@ -196,10 +206,12 @@ func (s *Subscriber) handleRecord(ctx context.Context, rec *kgo.Record) error {
 		select {
 		case <-ctx.Done():
 			timer.Stop()
+
 			return ctx.Err()
 		case <-timer.C:
 		}
 	}
+
 	return nil
 }
 
@@ -217,6 +229,7 @@ func (a *App) NewProducer() (*Producer, error) {
 	}
 	p.tracing = a.tracing
 	a.trackCloser(p.Close)
+
 	return p, nil
 }
 
@@ -228,11 +241,13 @@ func (a *App) NewSubscriber(group string, topics []string, handler Handler) (*Su
 	}
 	s.tracing = a.tracing
 	a.trackCloser(s.Close)
+
 	return s, nil
 }
 
 func (a *App) kafkaSecurity() KafkaSecurity {
 	security := a.opts.KafkaSecurity
 	security.Environment = a.opts.Environment
+
 	return security
 }
