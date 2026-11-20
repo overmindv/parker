@@ -28,6 +28,7 @@ func RequestIDFrom(ctx context.Context) string {
 	if id, ok := ctx.Value(ctxKeyRequestID).(string); ok {
 		return id
 	}
+
 	return ""
 }
 
@@ -40,6 +41,7 @@ func TraceIDFrom(ctx context.Context) string {
 	if id := trace.SpanContextFromContext(ctx).TraceID(); id.IsValid() {
 		return id.String()
 	}
+
 	return ""
 }
 
@@ -48,6 +50,7 @@ func SpanIDFrom(ctx context.Context) string {
 	if id := trace.SpanContextFromContext(ctx).SpanID(); id.IsValid() {
 		return id.String()
 	}
+
 	return ""
 }
 
@@ -91,6 +94,7 @@ func newRequestID() string {
 		// crypto/rand не падает практически никогда; на всякий случай — fallback.
 		return fmt.Sprintf("req-%d", time.Now().UnixNano())
 	}
+
 	return hex.EncodeToString(b[:])
 }
 
@@ -138,6 +142,7 @@ func (r *statusRecorder) Write(b []byte) (int, error) {
 		r.status = http.StatusOK
 		r.wroteHeader = true
 	}
+
 	return r.ResponseWriter.Write(b)
 }
 

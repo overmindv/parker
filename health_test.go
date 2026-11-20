@@ -8,6 +8,8 @@ import (
 )
 
 func TestHealthRegistry_ReadyAllOk(t *testing.T) {
+	t.Parallel()
+
 	h := NewHealthRegistry()
 	h.Add("a", HealthCheckFunc(func(context.Context) error { return nil }))
 	h.Add("b", HealthCheckFunc(func(context.Context) error { return nil }))
@@ -20,6 +22,8 @@ func TestHealthRegistry_ReadyAllOk(t *testing.T) {
 }
 
 func TestHealthRegistry_ReadyFail(t *testing.T) {
+	t.Parallel()
+
 	h := NewHealthRegistry()
 	h.Add("db", HealthCheckFunc(func(context.Context) error { return errors.New("connection refused") }))
 	err := h.Ready(context.Background())
@@ -32,6 +36,8 @@ func TestHealthRegistry_ReadyFail(t *testing.T) {
 }
 
 func TestHealthRegistry_EmptyReadyOk(t *testing.T) {
+	t.Parallel()
+
 	h := NewHealthRegistry()
 	if h.Enabled() {
 		t.Fatal("пустой реестр не enabled")

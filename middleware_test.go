@@ -15,6 +15,8 @@ func bufferLogger(buf *bytes.Buffer) *slog.Logger {
 }
 
 func TestRequestIDMiddleware_Generated(t *testing.T) {
+	t.Parallel()
+
 	h := requestIDMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		id := RequestIDFrom(r.Context())
 		if id == "" {
@@ -34,6 +36,8 @@ func TestRequestIDMiddleware_Generated(t *testing.T) {
 }
 
 func TestRequestIDMiddleware_PreservesIncoming(t *testing.T) {
+	t.Parallel()
+
 	h := requestIDMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(RequestIDFrom(r.Context())))
 	}))
@@ -47,6 +51,8 @@ func TestRequestIDMiddleware_PreservesIncoming(t *testing.T) {
 }
 
 func TestRecoverMiddleware_Returns500AndStaysAlive(t *testing.T) {
+	t.Parallel()
+
 	buf := &bytes.Buffer{}
 	logger := bufferLogger(buf)
 	h := recoverMiddleware(logger)(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
@@ -65,6 +71,8 @@ func TestRecoverMiddleware_Returns500AndStaysAlive(t *testing.T) {
 }
 
 func TestAccessLogMiddleware_LogsStatus(t *testing.T) {
+	t.Parallel()
+
 	buf := &bytes.Buffer{}
 	logger := bufferLogger(buf)
 	h := accessLogMiddleware(logger)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

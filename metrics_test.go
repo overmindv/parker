@@ -9,6 +9,8 @@ import (
 )
 
 func TestNormalizeRoute(t *testing.T) {
+	t.Parallel()
+
 	cases := map[string]string{
 		"/health":       "/health",
 		"/tasks":        "/tasks",
@@ -24,6 +26,8 @@ func TestNormalizeRoute(t *testing.T) {
 }
 
 func TestLooksLikeID(t *testing.T) {
+	t.Parallel()
+
 	if !looksLikeID("123") || !looksLikeID("550e8400-e29b-41d4-a716-446655440000") {
 		t.Fatal("число и UUID должны распознаваться как id")
 	}
@@ -33,6 +37,8 @@ func TestLooksLikeID(t *testing.T) {
 }
 
 func TestMetrics_MiddlewareObservesAndExposes(t *testing.T) {
+	t.Parallel()
+
 	// Полная связка App: бизнес-роут + /metrics, который должен показывать метрику.
 	app := newTestApp() // DefaultOptions: MetricsEnabled=true
 	if app.metrics == nil {

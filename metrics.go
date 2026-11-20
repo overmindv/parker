@@ -106,6 +106,7 @@ func normalizeRoute(path string) string {
 	if !changed {
 		return path
 	}
+
 	return strings.Join(parts, "/")
 }
 
@@ -125,6 +126,7 @@ func looksLikeID(p string) bool {
 			if r != '-' {
 				return false
 			}
+
 			continue
 		}
 		hexDigit := (r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F')
@@ -132,5 +134,6 @@ func looksLikeID(p string) bool {
 			return false
 		}
 	}
+
 	return true
 }
