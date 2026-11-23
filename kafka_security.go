@@ -75,13 +75,31 @@ func (s KafkaSecurity) validate() error {
 	return nil
 }
 
+// validateConfiguration проверяет форму настроек до фактического подключения.
+// Production TLS обязателен только для приложения, которое создаёт Kafka client.
+func (s KafkaSecurity) validateConfiguration() error {
+	s.Environment = ""
+
+	return s.validate()
+}
+
 func kafkaSecurityOptions(settings ...KafkaSecurity) ([]kgo.Opt, error) {
 	if len(settings) > 1 {
 		return nil, fmt.Errorf("only one Kafka security configuration allowed")
 	}
 	var s KafkaSecurity
-	if len(settings) == 1 {
+	if len(settings) == 0 {
+		loaded, err := loadKafkaSecurity(Env("ENV", environmentLocal))
+		if err != nil {
+			return nil, err
+		}
+		s = loaded
+	} else {
 		s = settings[0]
+	}
+	runtimeEnvironment := Env("ENV", environmentLocal)
+	if runtimeEnvironment == environmentProduction || s.Environment == "" {
+		s.Environment = runtimeEnvironment
 	}
 	if err := s.validate(); err != nil {
 		return nil, err
@@ -131,5 +149,5 @@ func loadKafkaSecurity(environment string) (KafkaSecurity, error) {
 		s.TLS = enabled
 	}
 
-	return s, s.validate()
+	return s, s.validateConfiguration()
 }

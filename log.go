@@ -1,34 +1,12 @@
 package parker
 
 import (
-	"fmt"
 	"log/slog"
-	"os"
+
+	"github.com/overmindv/parker/internal/logging"
 )
 
 // NewLogger собирает структурный JSON-логгер с заданным уровнем.
 func NewLogger(level string) (*slog.Logger, error) {
-	slogLevel, err := parseLevel(level)
-	if err != nil {
-		return nil, err
-	}
-	handler := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slogLevel})
-
-	return slog.New(handler), nil
-}
-
-// parseLevel преобразует строковый уровень в slog.Level.
-func parseLevel(value string) (slog.Level, error) {
-	switch value {
-	case logLevelDebug:
-		return slog.LevelDebug, nil
-	case logLevelInfo:
-		return slog.LevelInfo, nil
-	case logLevelWarn:
-		return slog.LevelWarn, nil
-	case logLevelError:
-		return slog.LevelError, nil
-	default:
-		return 0, fmt.Errorf("недопустимый уровень лога %q: ожидается debug, info, warn или error", value)
-	}
+	return logging.New(level)
 }

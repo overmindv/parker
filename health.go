@@ -2,8 +2,8 @@ package parker
 
 import (
 	"context"
-	"fmt"
-	"sync"
+
+	internalhealth "github.com/overmindv/parker/internal/health"
 )
 
 // HealthCheck — проверка готовности внешней зависимости (реализуется сервисом,
@@ -20,42 +20,21 @@ func (f HealthCheckFunc) Ping(ctx context.Context) error { return f(ctx) }
 
 // HealthRegistry хранит проверки готовности и агрегирует их в один Ready().
 type HealthRegistry struct {
-	mu      sync.RWMutex
-	checks  map[string]HealthCheck
-	enabled bool
+	registry internalhealth.Registry
 }
 
 // NewHealthRegistry создаёт пустой реестр.
 func NewHealthRegistry() *HealthRegistry {
-	return &HealthRegistry{checks: make(map[string]HealthCheck)}
+	return &HealthRegistry{}
 }
 
 // Add регистрирует проверку по имени.
-func (h *HealthRegistry) Add(name string, c HealthCheck) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.checks[name] = c
-	h.enabled = true
+func (h *HealthRegistry) Add(name string, check HealthCheck) {
+	h.registry.Add(name, check)
 }
 
 // Enabled сообщает, зарегистрирована ли хотя бы одна проверка.
-func (h *HealthRegistry) Enabled() bool {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
+func (h *HealthRegistry) Enabled() bool { return h.registry.Enabled() }
 
-	return h.enabled
-}
-
-// Ready проверяет все зависимости; возвращает nil, если все готовы,
-// либо ошибку с именем первой упавшей проверки.
-func (h *HealthRegistry) Ready(ctx context.Context) error {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-	for name, check := range h.checks {
-		if err := check.Ping(ctx); err != nil {
-			return fmt.Errorf("%s недоступен: %w", name, err)
-		}
-	}
-
-	return nil
-}
+// Ready проверяет все зарегистрированные зависимости.
+func (h *HealthRegistry) Ready(ctx context.Context) error { return h.registry.Ready(ctx) }

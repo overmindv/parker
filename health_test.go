@@ -3,9 +3,36 @@ package parker
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 )
+
+func TestHealthPublicTypesRemainInParkerPackage(t *testing.T) {
+	t.Parallel()
+
+	for name, typ := range map[string]reflect.Type{
+		"HealthCheck":     reflect.TypeOf((*HealthCheck)(nil)).Elem(),
+		"HealthCheckFunc": reflect.TypeOf(HealthCheckFunc(nil)),
+		"HealthRegistry":  reflect.TypeOf(HealthRegistry{}),
+	} {
+		if typ.Name() != name || typ.PkgPath() != "github.com/overmindv/parker" {
+			t.Fatalf("%s потерял identity публичного parker-типа: name=%q pkg=%q", name, typ.Name(), typ.PkgPath())
+		}
+	}
+}
+
+func TestHealthRegistryZeroValueIsReady(t *testing.T) {
+	t.Parallel()
+
+	var registry HealthRegistry
+	if registry.Enabled() {
+		t.Fatal("нулевой реестр не должен быть enabled")
+	}
+	if err := registry.Ready(context.Background()); err != nil {
+		t.Fatalf("нулевой реестр должен быть ready: %v", err)
+	}
+}
 
 func TestHealthRegistry_ReadyAllOk(t *testing.T) {
 	t.Parallel()

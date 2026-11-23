@@ -76,6 +76,38 @@ func TestKafkaSecurityEnvFailsClosed(t *testing.T) {
 	}
 }
 
+//nolint:paralleltest // t.Setenv изменяет process-wide environment
+func TestLoadProductionWithoutKafkaDoesNotRequireTLS(t *testing.T) {
+	t.Setenv("ENV", "production")
+	t.Setenv("KAFKA_TLS_ENABLED", "")
+	t.Setenv("KAFKA_SASL_MECHANISM", "")
+	t.Setenv("KAFKA_SASL_USERNAME", "")
+	t.Setenv("KAFKA_SASL_PASSWORD", "")
+
+	if _, err := Load(); err != nil {
+		t.Fatalf("сервис без Kafka должен загружаться в production: %v", err)
+	}
+}
+
+//nolint:paralleltest // t.Setenv изменяет process-wide environment
+func TestDirectKafkaConstructorRequiresTLSInProduction(t *testing.T) {
+	t.Setenv("ENV", "production")
+	t.Setenv("KAFKA_TLS_ENABLED", "")
+	t.Setenv("KAFKA_TLS_CA_FILE", "")
+	t.Setenv("KAFKA_TLS_CERT_FILE", "")
+	t.Setenv("KAFKA_TLS_KEY_FILE", "")
+	t.Setenv("KAFKA_TLS_SERVER_NAME", "")
+	t.Setenv("KAFKA_SASL_MECHANISM", "")
+	t.Setenv("KAFKA_SASL_USERNAME", "")
+	t.Setenv("KAFKA_SASL_PASSWORD", "")
+
+	for _, security := range [][]KafkaSecurity{nil, {{}}, {{Environment: "local"}}} {
+		if _, err := NewProducer([]string{"localhost:9092"}, security...); err == nil {
+			t.Fatalf("production Kafka client без TLS должен быть отклонён: %#v", security)
+		}
+	}
+}
+
 func TestKafkaRejectsMalformedCertificatesAndAppDowngrade(t *testing.T) {
 	t.Parallel()
 
