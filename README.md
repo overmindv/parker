@@ -191,3 +191,15 @@ Bootstrap template сохраняет v0.1.0; явный go get подключа
 immutable tag: workflow получает исходный tag object из origin, сверяет его commit
 с checkout и зелёным main CI, повторяет все gates. Тег и module contents не меняются.
 Изменение самой библиотеки после tag требует новой версии.
+
+## Infrastructure boundaries и release v0.3.0
+
+Реализация инфраструктуры вынесена в `internal/` (`env`, `health`, `logging`),
+публичный фасад корневого пакета сохранён (OVM-300). В production TLS обязателен
+только для сервиса, создающего Kafka-клиент: сервис без Kafka (например, users)
+стартует без `KAFKA_TLS_ENABLED`. Для собственных Kafka-клиентов используйте
+`KafkaClientOptions`: он возвращает те же TLS/SASL-опции и проверки, что
+`NewProducer`/`NewSubscriber`, без копирования разбора `KAFKA_*` в сервисе.
+
+Сервис обновляется независимо через `go get github.com/overmindv/parker@v0.3.0`,
+без replace и pseudo-version. [Changelog и порядок обновления](docs/releases/v0.3.0.md).
