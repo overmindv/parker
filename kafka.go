@@ -125,6 +125,13 @@ func NewSubscriber(brokers []string, group string, topics []string, handler Hand
 	return &Subscriber{client: client, log: log, handler: handler}, nil
 }
 
+// KafkaClientOptions возвращает базовые kgo-опции (TLS/SASL) для собственных
+// Kafka-клиентов сервиса. Без аргументов настройки читаются из окружения так же,
+// как в NewProducer и NewSubscriber, и проверяются по текущему ENV.
+func KafkaClientOptions(security ...KafkaSecurity) ([]kgo.Opt, error) {
+	return kafkaSecurityOptions(security...)
+}
+
 // Run — цикл потребления; Runnable для Runner'а. Завершается по отмене ctx.
 func (s *Subscriber) Run(ctx context.Context) error {
 	for {

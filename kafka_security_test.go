@@ -108,6 +108,32 @@ func TestDirectKafkaConstructorRequiresTLSInProduction(t *testing.T) {
 	}
 }
 
+//nolint:paralleltest // t.Setenv изменяет process-wide environment
+func TestKafkaClientOptionsShareProducerSecurity(t *testing.T) {
+	t.Setenv("ENV", "production")
+	t.Setenv("KAFKA_TLS_ENABLED", "")
+	t.Setenv("KAFKA_TLS_CA_FILE", "")
+	t.Setenv("KAFKA_TLS_CERT_FILE", "")
+	t.Setenv("KAFKA_TLS_KEY_FILE", "")
+	t.Setenv("KAFKA_TLS_SERVER_NAME", "")
+	t.Setenv("KAFKA_SASL_MECHANISM", "")
+	t.Setenv("KAFKA_SASL_USERNAME", "")
+	t.Setenv("KAFKA_SASL_PASSWORD", "")
+
+	if _, err := KafkaClientOptions(); err == nil {
+		t.Fatal("production Kafka client options без TLS должны быть отклонены")
+	}
+
+	t.Setenv("ENV", "staging")
+	opts, err := KafkaClientOptions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(opts) != 0 {
+		t.Fatal("plaintext staging options должны оставаться пустыми")
+	}
+}
+
 func TestKafkaRejectsMalformedCertificatesAndAppDowngrade(t *testing.T) {
 	t.Parallel()
 
