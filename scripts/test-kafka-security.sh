@@ -1,5 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
+root=$(cd "$(dirname "$0")/.." && pwd)
+cd "$root"
+# Go возвращает успех и при пустой выборке: проверяем наличие теста до запуска fixture.
+test_package=./internal/kafka
+test_name=TestAuthenticatedKafka
+go test -tags=component "$test_package" -list "^${test_name}$" | grep -Fx "$test_name" >/dev/null
 trap 'echo "Kafka fixture failed at line $LINENO" >&2' ERR
 work=$(mktemp -d)
 name="ovm184-kafka-$$"
@@ -33,7 +39,10 @@ redpanda:
 YAML
 chmod 644 "$work/redpanda.yaml"
 echo "Starting isolated Kafka"
-docker run -d --name "$name" -p 127.0.0.1:19093:19093 -v "$work:/certs:ro" --entrypoint /bin/sh redpandadata/redpanda:v24.3.18 -c 'cp /certs/redpanda.yaml /tmp/redpanda.yaml; exec rpk redpanda start --config /tmp/redpanda.yaml --overprovisioned --smp 1 --memory 512M --reserve-memory 0M --check=false'  >/dev/null
+docker create --name "$name" -p 127.0.0.1:19093:19093 --entrypoint /bin/sh redpandadata/redpanda:v24.3.18 -c 'cp /certs/redpanda.yaml /tmp/redpanda.yaml; exec rpk redpanda start --config /tmp/redpanda.yaml --overprovisioned --smp 1 --memory 512M --reserve-memory 0M --check=false'  >/dev/null
+# docker cp работает и с удалённым daemon/Colima, где host TMPDIR не смонтирован.
+docker cp "$work" "$name:/certs"
+docker start "$name" >/dev/null
 for attempt in $(seq 1 40); do
  if [ "$(docker inspect --format '{{.State.Running}}' "$name")" != true ]; then
  echo "Kafka exited before readiness" >&2
@@ -52,4 +61,4 @@ rpk() { docker exec "$name" rpk "$@" -X brokers=127.0.0.1:19093 -X tls.enabled=t
 rpk topic create ovm184-secure ovm184-denied >/dev/null
 rpk security acl create --allow-principal User:client --operation read,write,describe --topic ovm184-secure >/dev/null
 rpk security acl create --allow-principal User:client --operation read --group ovm184-group >/dev/null
-PARKER_SECURE_KAFKA=127.0.0.1:19093 PARKER_SECURE_CA="$work/ca.crt" PARKER_SECURE_PASSWORD="$password" go test -race -tags=component . -run TestAuthenticatedKafka -count=1 -v
+PARKER_SECURE_KAFKA=127.0.0.1:19093 PARKER_SECURE_CA="$work/ca.crt" PARKER_SECURE_PASSWORD="$password" go test -race -tags=component "$test_package" -run "^${test_name}$" -count=1 -v
