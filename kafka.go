@@ -4,6 +4,8 @@ import (
 	"context"
 	"log/slog"
 
+	"github.com/overmindv/parker/internal/app"
+	"github.com/overmindv/parker/internal/convert"
 	"github.com/overmindv/parker/internal/kafka"
 	"github.com/twmb/franz-go/pkg/kgo"
 )
@@ -15,11 +17,8 @@ type Producer kafka.Producer
 // NewProducer создаёт producer к заданным брокерам.
 func NewProducer(brokers []string, security ...KafkaSecurity) (*Producer, error) {
 	producer, err := kafka.NewProducer(brokers, internalSecurity(security)...)
-	if err != nil {
-		return nil, err
-	}
 
-	return (*Producer)(producer), nil
+	return (*Producer)(producer), err
 }
 
 // Publish публикует запись в топик с ключом (обеспечивает порядок в partition).
@@ -57,11 +56,8 @@ type Subscriber kafka.Subscriber
 // NewSubscriber создаёт consumer-group подписчика.
 func NewSubscriber(brokers []string, group string, topics []string, handler Handler, log *slog.Logger, security ...KafkaSecurity) (*Subscriber, error) {
 	subscriber, err := kafka.NewSubscriber(brokers, group, topics, kafka.Handler(handler), log, internalSecurity(security)...)
-	if err != nil {
-		return nil, err
-	}
 
-	return (*Subscriber)(subscriber), nil
+	return (*Subscriber)(subscriber), err
 }
 
 // KafkaClientOptions возвращает базовые kgo-опции (TLS/SASL) для собственных
@@ -87,43 +83,18 @@ func (s *Subscriber) Close() {
 
 // NewProducer создаёт producer из broker-ов Options приложения и регистрирует его очистку.
 func (a *App) NewProducer() (*Producer, error) {
-	p, err := kafka.NewProducerWithRuntime(a.tracing, a.opts.KafkaBrokers, internalSecurity([]KafkaSecurity{a.kafkaSecurity()})...)
-	if err != nil {
-		return nil, err
-	}
-	producer := (*Producer)(p)
-	a.trackCloser(producer.Close)
+	p, err := (*app.App)(a).NewProducer()
 
-	return producer, nil
+	return (*Producer)(p), err
 }
 
 // NewSubscriber создаёт consumer-group подписчика из broker-ов Options и регистрирует очистку.
 func (a *App) NewSubscriber(group string, topics []string, handler Handler) (*Subscriber, error) {
-	s, err := kafka.NewSubscriberWithRuntime(
-		a.tracing, a.opts.KafkaBrokers, group, topics, kafka.Handler(handler), a.log,
-		internalSecurity([]KafkaSecurity{a.kafkaSecurity()})...,
-	)
-	if err != nil {
-		return nil, err
-	}
-	subscriber := (*Subscriber)(s)
-	a.trackCloser(subscriber.Close)
+	s, err := (*app.App)(a).NewSubscriber(group, topics, kafka.Handler(handler))
 
-	return subscriber, nil
-}
-
-func (a *App) kafkaSecurity() KafkaSecurity {
-	security := a.opts.KafkaSecurity
-	security.Environment = a.opts.Environment
-
-	return security
+	return (*Subscriber)(s), err
 }
 
 func internalSecurity(settings []KafkaSecurity) []kafka.Security {
-	converted := make([]kafka.Security, 0, len(settings))
-	for _, setting := range settings {
-		converted = append(converted, kafka.Security(setting))
-	}
-
-	return converted
+	return convert.Slice(settings, func(s KafkaSecurity) kafka.Security { return kafka.Security(s) })
 }

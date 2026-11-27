@@ -201,12 +201,15 @@ immutable tag: workflow получает исходный tag object из origin
 
 Реализация разложена по доменам:
 
+- `internal/app` — выбор подкоманды, сборка приложения, регистрация и закрытие ресурсов;
+- `internal/config` — значения по умолчанию, загрузка env и валидация настроек;
+- `internal/convert` — преобразование коллекций между публичными и внутренними типами;
 - `internal/observability` — метрики, трейсинг, OTLP, propagation;
 - `internal/httpkit` — HTTP-сервер и middleware;
 - `internal/requestid` — request_id в контексте;
 - `internal/kafka` — producer/subscriber, TLS/SASL;
 - `internal/postgres`, `internal/migrate` — пул и goose-миграции;
-- `internal/outbox` — transactional outbox и retry;
+- `internal/outbox` — transactional outbox, retry и адаптация хранилищ сервисов;
 - `internal/lifecycle` — Runner и graceful shutdown;
 - `internal/servicegen` + `template/` — генерация каркаса сервиса;
 - `internal/cli` — подкоманды `migrate`/`init`;
