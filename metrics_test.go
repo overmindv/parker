@@ -12,8 +12,8 @@ func TestMetrics_MiddlewareObservesAndExposes(t *testing.T) {
 	t.Parallel()
 
 	// Полная связка App: бизнес-роут + /metrics, который должен показывать метрику.
-	app := newTestApp() // DefaultOptions: MetricsEnabled=true
-	if app.metrics == nil {
+	app := newTestApp(t) // DefaultOptions: MetricsEnabled=true
+	if app.Metrics() == nil {
 		t.Fatal("метрики должны быть включены в тестовом App")
 	}
 	app.HTTP().HandleFunc("GET /tasks/123", func(w http.ResponseWriter, _ *http.Request) {
@@ -28,7 +28,7 @@ func TestMetrics_MiddlewareObservesAndExposes(t *testing.T) {
 	// /metrics отдаёт метрику запросов.
 	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
 	rec := httptest.NewRecorder()
-	app.server.Handler.ServeHTTP(rec, req)
+	app.state.Handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("/metrics: ожидался 200, получили %d", rec.Code)
 	}

@@ -11,7 +11,7 @@ import (
 func TestMetricsRegister(t *testing.T) {
 	t.Parallel()
 
-	app := newTestApp()
+	app := newTestApp(t)
 	gauge := prometheus.NewGauge(prometheus.GaugeOpts{Name: "fixture_pending", Help: "Pending fixture."})
 	gauge.Set(42)
 

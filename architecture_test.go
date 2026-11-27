@@ -1,8 +1,12 @@
 package parker
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -30,6 +34,9 @@ var rootFacadeFiles = map[string]bool{
 }
 
 var internalDomains = []string{
+	"app",
+	"config",
+	"convert",
 	"cli",
 	"env",
 	"health",
@@ -78,6 +85,60 @@ func TestRootContainsOnlyPublicFacade(t *testing.T) {
 		}
 		if !rootFacadeFiles[name] {
 			t.Errorf("файл %s не входит в публичный фасад: реализацию добавляйте в internal/<домен>", name)
+		}
+	}
+}
+
+func TestFacadeHasNoControlFlow(t *testing.T) {
+	t.Parallel()
+
+	files := token.NewFileSet()
+	for name := range rootFacadeFiles {
+		file, err := parser.ParseFile(files, name, nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ast.Inspect(file, func(node ast.Node) bool {
+			switch n := node.(type) {
+			case *ast.TypeSpec:
+				if n.Name.IsExported() && n.Assign.IsValid() {
+					t.Errorf("%s: публичный тип %s должен быть определён в корне", files.Position(n.Pos()), n.Name)
+				}
+			case *ast.IfStmt, *ast.ForStmt, *ast.RangeStmt, *ast.SwitchStmt, *ast.TypeSwitchStmt,
+				*ast.SelectStmt, *ast.GoStmt, *ast.DeferStmt, *ast.SendStmt, *ast.BranchStmt:
+				t.Errorf("%s: управляющая логика должна находиться в internal", files.Position(node.Pos()))
+			}
+
+			return true
+		})
+	}
+}
+
+// Внешний код использует именованные публичные типы в литералах, интерфейсах и рефлексии.
+func TestFacadeRetainsPublicTypeIdentities(t *testing.T) {
+	t.Parallel()
+
+	const module = "github.com/overmindv/parker"
+	for _, typ := range []reflect.Type{
+		reflect.TypeFor[App](), reflect.TypeFor[HTTPServer](), reflect.TypeFor[Handler](),
+		reflect.TypeFor[HealthCheck](), reflect.TypeFor[HealthCheckFunc](), reflect.TypeFor[HealthRegistry](),
+		reflect.TypeFor[KafkaSecurity](), reflect.TypeFor[Metrics](), reflect.TypeFor[Option](),
+		reflect.TypeFor[Options](), reflect.TypeFor[Outbox](), reflect.TypeFor[OutboxDispatcher](),
+		reflect.TypeFor[OutboxRecord](), reflect.TypeFor[PgOutbox](), reflect.TypeFor[Producer](),
+		reflect.TypeFor[RecordPosition](), reflect.TypeFor[Runnable](), reflect.TypeFor[Runner](),
+		reflect.TypeFor[Subscriber](), reflect.TypeFor[TraceOptions](),
+	} {
+		if typ.PkgPath() != module {
+			t.Errorf("тип %s объявлен в %s", typ.Name(), typ.PkgPath())
+		}
+	}
+	options := reflect.TypeFor[Options]()
+	for name, want := range map[string]reflect.Type{
+		"KafkaSecurity": reflect.TypeFor[KafkaSecurity](),
+		"Tracing":       reflect.TypeFor[TraceOptions](),
+	} {
+		if field, ok := options.FieldByName(name); !ok || field.Type != want {
+			t.Errorf("Options.%s должен иметь тип %s", name, want)
 		}
 	}
 }
