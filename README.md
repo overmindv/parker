@@ -97,6 +97,31 @@ Subscriber обрабатывает одну запись за poll, блоки�
 Kafka component: `PARKER_TEST_KAFKA=localhost:19092 go test -race -tags=component . -run TestKafka`.
 Порядок обновления потребителей: [release v0.2.0](docs/releases/v0.2.0.md).
 
+## Генерация моделей PostgreSQL для PgOutbox
+
+Jet v2.15.0 строит Go-модели и типизированные таблицы по каталогу работающей PostgreSQL.
+Для воспроизводимой генерации используйте выделенную PostgreSQL 17 из `compose.jet.yaml`.
+Команда `make jet-db` поднимает её на loopback-порту 55436, применяет опубликованную
+`OutboxSchema` и затем goose-миграции из `docs/migrations`. База хранится в tmpfs.
+Фикстура использует локальную trust-аутентификацию.
+
+```sh
+make jet-db
+export JET_DATABASE_DSN='postgres://parker_jet@127.0.0.1:55436/parker_jet?sslmode=disable'
+export JET_SCHEMA=public
+make jet-generate
+make jet-check
+docker compose -f compose.jet.yaml down
+```
+
+`JET_SCHEMA` по умолчанию равна `public`. Генератор читает только описание схемы,
+отбирает `outbox` и `outbox_replay_audit` и записывает результат во временный каталог.
+После успешной генерации `jet-generate` обновляет файлы в
+`internal/adapter/postgres/generated/{model,table}`. Этот путь одинаков для всех имён баз.
+`jet-check` повторяет генерацию и показывает diff с рабочей копией, в том числе лишние файлы.
+После изменения миграции коммитьте сгенерированные файлы вместе с ней.
+В CI сборка запускает ту же проверку на выделенной базе.
+
 ## Lease стандартного PgOutbox (OVM-182)
 
 Перед обновлением worker владелец применяет новую append-only миграцию из

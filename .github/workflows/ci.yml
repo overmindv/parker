@@ -40,6 +40,15 @@ jobs:
           go-version-file: go.mod
       - name: Build all packages
         run: make build
+      - name: Check generated outbox models against PostgreSQL 17
+        env:
+          JET_DATABASE_DSN: postgres://parker_jet@127.0.0.1:55436/parker_jet?sslmode=disable
+        run: |
+          make jet-db
+          make jet-check
+      - name: Stop Jet database
+        if: always()
+        run: docker compose -f compose.jet.yaml down
 
   # Component-тесты против PostgreSQL (миграции/пул) — будут дополнены в Фазе 3.
   component:
