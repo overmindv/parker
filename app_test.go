@@ -10,20 +10,36 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	runtimeapp "github.com/overmindv/parker/internal/app"
 )
 
-func newTestApp() *App {
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	app := &App{opts: DefaultOptions(), log: logger, health: NewHealthRegistry()}
-	app.initServer()
+type testApp struct {
+	*App
+	state *runtimeapp.App
+}
 
-	return app
+func configuredTestApp(t testing.TB, opts Options, logger *slog.Logger) *testApp {
+	t.Helper()
+	state, err := runtimeapp.New(opts.settings(), logger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(state.Close)
+
+	return &testApp{App: (*App)(state), state: state}
+}
+
+func newTestApp(t testing.TB, opts ...Option) *testApp {
+	t.Helper()
+
+	return configuredTestApp(t, DefaultOptions().Apply(opts), discardLog())
 }
 
 func TestApp_PostgresWithoutDSN_ReturnsError(t *testing.T) {
 	t.Parallel()
 
-	app := newTestApp() // DefaultOptions: DatabaseURL=""
+	app := newTestApp(t) // DefaultOptions: DatabaseURL=""
 	if _, err := app.Postgres(); err == nil {
 		t.Fatal("Postgres() без DATABASE_URL должна вернуть ошибку")
 	}
@@ -36,8 +52,7 @@ func TestApp_AccessLogContainsRequestID(t *testing.T) {
 
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&buf, nil))
-	app := &App{opts: DefaultOptions(), log: logger, health: NewHealthRegistry()}
-	app.initServer()
+	app := configuredTestApp(t, DefaultOptions(), logger)
 
 	app.HTTP().HandleFunc("GET /ping", func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte("pong"))
@@ -49,11 +64,11 @@ func TestApp_AccessLogContainsRequestID(t *testing.T) {
 	}
 }
 
-func serveRequest(t *testing.T, app *App, method, path string) *httptest.ResponseRecorder {
+func serveRequest(t *testing.T, app *testApp, method, path string) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(method, path, nil)
 	rec := httptest.NewRecorder()
-	app.server.Handler.ServeHTTP(rec, req)
+	app.state.Handler().ServeHTTP(rec, req)
 
 	return rec
 }
@@ -61,7 +76,7 @@ func serveRequest(t *testing.T, app *App, method, path string) *httptest.Respons
 func TestApp_HealthEndpoint(t *testing.T) {
 	t.Parallel()
 
-	app := newTestApp()
+	app := newTestApp(t)
 	if rec := serveRequest(t, app, http.MethodGet, "/health"); rec.Code != http.StatusOK {
 		t.Fatalf("/health: ожидался 200, получили %d", rec.Code)
 	}
@@ -70,7 +85,7 @@ func TestApp_HealthEndpoint(t *testing.T) {
 func TestApp_ReadyEndpointEmptyOk(t *testing.T) {
 	t.Parallel()
 
-	app := newTestApp()
+	app := newTestApp(t)
 	if rec := serveRequest(t, app, http.MethodGet, "/ready"); rec.Code != http.StatusOK {
 		t.Fatalf("/ready без чекков: ожидался 200, получили %d", rec.Code)
 	}
@@ -79,7 +94,7 @@ func TestApp_ReadyEndpointEmptyOk(t *testing.T) {
 func TestApp_ReadyEndpointFailsWithCheck(t *testing.T) {
 	t.Parallel()
 
-	app := newTestApp()
+	app := newTestApp(t)
 	app.AddHealthCheck("db", HealthCheckFunc(func(context.Context) error {
 		return errors.New("down")
 	}))
@@ -91,7 +106,7 @@ func TestApp_ReadyEndpointFailsWithCheck(t *testing.T) {
 func TestApp_RegisterBusinessRoute(t *testing.T) {
 	t.Parallel()
 
-	app := newTestApp()
+	app := newTestApp(t)
 	app.HTTP().HandleFunc("GET /ping", func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte("pong"))
 	})

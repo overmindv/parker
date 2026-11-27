@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/overmindv/parker/internal/lifecycle"
 	"github.com/overmindv/parker/internal/observability"
 	"go.opentelemetry.io/otel/trace"
 	collectorpb "go.opentelemetry.io/proto/otlp/collector/trace/v1"
@@ -71,20 +72,19 @@ func (c *collectorFixture) snapshot() ([]*tracepb.Span, []byte) {
 	return slices.Clone(c.spans), slices.Clone(c.wire)
 }
 
-func tracedApp(t *testing.T, endpoint, service string, ratio float64) *App {
+func tracedApp(t *testing.T, endpoint, service string, ratio float64, options ...Option) *testApp {
 	t.Helper()
 	opts := DefaultOptions()
 	opts.Tracing = TraceOptions{Endpoint: endpoint, SampleRatio: ratio}
 	opts.ServiceName = service
 	opts.MetricsEnabled = false
 	log := slog.New(slog.DiscardHandler)
-	tracing, err := newTraceRuntime(opts, log)
-	if err != nil || tracing == nil {
-		t.Fatal("cannot create trace provider", err)
+	a := configuredTestApp(t, opts.Apply(options), log)
+	tracing := a.state.Tracing()
+	if tracing == nil {
+		t.Fatal("cannot create trace provider")
 	}
 	t.Cleanup(func() { tracing.Shutdown(context.Background()) })
-	a := &App{opts: opts, log: log, health: NewHealthRegistry(), tracing: tracing}
-	a.initServer()
 
 	return a
 }
@@ -102,7 +102,7 @@ func TestTraceHTTPExportsLinkedSpansWithoutRequestData(t *testing.T) {
 		}
 		w.WriteHeader(http.StatusForbidden)
 	})
-	downstream := httptest.NewServer(b.server.Handler)
+	downstream := httptest.NewServer(b.state.Handler())
 	t.Cleanup(downstream.Close)
 	client := &http.Client{Transport: a.TraceHTTPTransport(nil), Timeout: time.Second}
 	t.Cleanup(client.CloseIdleConnections)
@@ -134,12 +134,12 @@ func TestTraceHTTPExportsLinkedSpansWithoutRequestData(t *testing.T) {
 	req.Header.Set(TraceparentHeader, traceFixture)
 	req.Header.Set("Authorization", "Bearer "+private)
 	response := httptest.NewRecorder()
-	a.server.Handler.ServeHTTP(response, req)
+	a.state.Handler().ServeHTTP(response, req)
 	if response.Code != http.StatusCreated {
 		t.Fatal("HTTP handling changed while recording spans", response.Code)
 	}
-	a.tracing.Shutdown(t.Context())
-	b.tracing.Shutdown(t.Context())
+	a.state.Tracing().Shutdown(t.Context())
+	b.state.Tracing().Shutdown(t.Context())
 	spans, wire := collector.snapshot()
 	if len(spans) != 3 || bytes.Contains(wire, []byte(private)) {
 		t.Fatal("HTTP trace missing spans or leaking data", len(spans))
@@ -228,8 +228,8 @@ func TestTraceExporterHonorsSampling(t *testing.T) {
 		})
 		r := httptest.NewRequest(http.MethodGet, "/work", nil)
 		r.Header.Set(TraceparentHeader, tc.parent)
-		a.server.Handler.ServeHTTP(httptest.NewRecorder(), r)
-		a.tracing.Shutdown(t.Context())
+		a.state.Handler().ServeHTTP(httptest.NewRecorder(), r)
+		a.state.Tracing().Shutdown(t.Context())
 	}
 	if spans, _ := collector.snapshot(); len(spans) != 0 {
 		t.Fatal("unsampled spans reached the collector", len(spans))
@@ -295,11 +295,11 @@ func TestTraceRunnerFlushHonorsShutdownDeadline(t *testing.T) {
 		collector.Close()
 	})
 	a := tracedApp(t, collector.URL, "shutdown-fixture", 1)
-	_, span := a.tracing.Tracer().Start(t.Context(), "fixture")
+	_, span := a.state.Tracing().Tracer().Start(t.Context(), "fixture")
 	span.End()
 	const budget = 250 * time.Millisecond
-	r := NewRunner(a.log, budget)
-	r.SetAfterShutdown(a.tracing.Shutdown)
+	r := lifecycle.NewRunner(a.Logger(), budget)
+	r.SetAfterShutdown(a.state.Tracing().Shutdown)
 	ctx, cancel := context.WithCancel(t.Context())
 	r.AddRunnable("cancel", func(context.Context) error {
 		cancel()
@@ -307,7 +307,7 @@ func TestTraceRunnerFlushHonorsShutdownDeadline(t *testing.T) {
 		return nil
 	})
 	start := time.Now()
-	server := &http.Server{Addr: "127.0.0.1:0", Handler: a.server.Handler, ReadHeaderTimeout: time.Second}
+	server := &http.Server{Addr: "127.0.0.1:0", Handler: a.state.Handler(), ReadHeaderTimeout: time.Second}
 	if err := r.Run(ctx, server); err != nil {
 		t.Fatal(err)
 	}
@@ -331,7 +331,7 @@ func TestTracingConfigRejectsSensitiveOrInsecureEndpoints(t *testing.T) {
 		"https://collector.invalid:65536",
 	} {
 		o := TraceOptions{Endpoint: raw, SampleRatio: 0.1}
-		if _, err := o.collectorEndpoint("production", "test"); err == nil || strings.Contains(err.Error(), "private-fixture") {
+		if _, err := observability.ResolveEndpoint(o.Endpoint, o.SampleRatio, "production", "test"); err == nil || strings.Contains(err.Error(), "private-fixture") {
 			t.Fatal("unsafe endpoint accepted or repeated in error")
 		}
 	}
@@ -339,7 +339,7 @@ func TestTracingConfigRejectsSensitiveOrInsecureEndpoints(t *testing.T) {
 	if _, err := Load(); err == nil {
 		t.Fatal("non-finite sampling ratio accepted")
 	}
-	valid, err := (TraceOptions{Endpoint: "https://collector.invalid", SampleRatio: 0.1}).collectorEndpoint("production", "test")
+	valid, err := observability.ResolveEndpoint("https://collector.invalid", 0.1, "production", "test")
 	if err != nil || valid.Path != observability.TraceExportPath {
 		t.Fatal("secure endpoint rejected or missing default path", err)
 	}

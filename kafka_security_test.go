@@ -24,7 +24,7 @@ func TestKafkaSecurityRejectsUnsafeConfigurations(t *testing.T) {
 		{TLS: true, CAFile: "missing"},
 	}
 	for _, c := range cases {
-		if _, err := kafkaSecurityOptions(c); err == nil {
+		if _, err := KafkaClientOptions(c); err == nil {
 			t.Fatalf("accepted invalid config: %v", c)
 		} else if strings.Contains(err.Error(), "sensitive") {
 			t.Fatal("secret in error")
@@ -142,11 +142,15 @@ func TestKafkaRejectsMalformedCertificatesAndAppDowngrade(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, security := range []KafkaSecurity{{TLS: true, CAFile: file}, {TLS: true, CertFile: file, KeyFile: file}} {
-		if _, err := kafkaSecurityOptions(security); err == nil {
+		if _, err := KafkaClientOptions(security); err == nil {
 			t.Fatal("malformed certificate accepted")
 		}
 	}
-	app := &App{opts: Options{Environment: "production", KafkaBrokers: []string{"localhost:1"}, KafkaSecurity: KafkaSecurity{Environment: "local"}}}
+	app := newTestApp(t, func(o *Options) {
+		o.Environment = "production"
+		o.KafkaBrokers = []string{"localhost:1"}
+		o.KafkaSecurity.Environment = "local"
+	})
 	if _, err := app.NewProducer(); err == nil {
 		t.Fatal("app environment overridden")
 	}

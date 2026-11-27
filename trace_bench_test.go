@@ -18,8 +18,7 @@ func BenchmarkTraceHTTPWithoutExport(b *testing.B) {
 		b.Run(name, func(b *testing.B) {
 			opts := DefaultOptions()
 			opts.MetricsEnabled = false
-			a := &App{opts: opts, log: slog.New(slog.DiscardHandler), health: NewHealthRegistry()}
-			a.initServer()
+			a := configuredTestApp(b, opts, slog.New(slog.DiscardHandler))
 			a.HTTP().HandleFunc("GET /work/{id}", func(w http.ResponseWriter, _ *http.Request) {
 				w.WriteHeader(http.StatusNoContent)
 			})
@@ -31,7 +30,7 @@ func BenchmarkTraceHTTPWithoutExport(b *testing.B) {
 			w := make(benchWriter)
 			b.ReportAllocs()
 			for b.Loop() {
-				a.server.Handler.ServeHTTP(w, r)
+				a.state.Handler().ServeHTTP(w, r)
 			}
 		})
 	}
