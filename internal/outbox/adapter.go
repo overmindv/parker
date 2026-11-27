@@ -13,10 +13,8 @@ type store[R ~recordFields] interface {
 	MarkSent(context.Context, []string) error
 }
 
-// Эти возможности PgOutbox диспетчер использует только при их совместной поддержке.
-type capabilities[R ~recordFields] interface {
-	MarkClaimSent(context.Context, R) error
-	MarkClaimFailed(context.Context, R) error
+// queueMaintenance объединяет операции обслуживания, которые диспетчер использует вместе.
+type queueMaintenance interface {
 	QueueAge(context.Context) (time.Duration, error)
 	CleanupSent(context.Context, time.Duration, int) (int64, error)
 }
@@ -27,27 +25,29 @@ func (a adapter[R]) FetchPending(ctx context.Context, limit int) ([]Record, erro
 	return recordsAs[Record](a.store.FetchPending(ctx, limit))
 }
 
-type fullAdapter[R ~recordFields] struct {
-	adapter[R]
-	capabilities[R]
+type dispatcherStore struct {
+	Outbox
+	markClaimSent   func(context.Context, Record) error
+	markClaimFailed func(context.Context, Record) error
+	maintenance     queueMaintenance
 }
 
-func (a fullAdapter[R]) MarkClaimSent(ctx context.Context, record Record) error {
-	return a.capabilities.MarkClaimSent(ctx, R(record))
-}
-
-func (a fullAdapter[R]) MarkClaimFailed(ctx context.Context, record Record) error {
-	return a.capabilities.MarkClaimFailed(ctx, R(record))
-}
-
-// Adapt сохраняет опциональные возможности публичного хранилища для диспетчера.
-func Adapt[R ~recordFields](s store[R]) Outbox {
-	base := adapter[R]{s}
-	if full, ok := s.(capabilities[R]); ok {
-		return fullAdapter[R]{base, full}
+// adapt независимо находит возможности исходного хранилища до преобразования типа записи.
+func adapt[R ~recordFields](s store[R]) dispatcherStore {
+	d := dispatcherStore{Outbox: adapter[R]{s}}
+	if claimed, ok := s.(interface {
+		MarkClaimSent(context.Context, R) error
+	}); ok {
+		d.markClaimSent = func(ctx context.Context, r Record) error { return claimed.MarkClaimSent(ctx, R(r)) }
 	}
+	if retry, ok := s.(interface {
+		MarkClaimFailed(context.Context, R) error
+	}); ok {
+		d.markClaimFailed = func(ctx context.Context, r Record) error { return retry.MarkClaimFailed(ctx, R(r)) }
+	}
+	d.maintenance, _ = s.(queueMaintenance)
 
-	return base
+	return d
 }
 
 // FetchPendingAs возвращает записи PgOutbox в публичном типе.
@@ -56,7 +56,7 @@ func FetchPendingAs[R ~recordFields](s *PgOutbox, ctx context.Context, limit int
 }
 
 func recordsAs[To, From ~recordFields](records []From, err error) ([]To, error) {
-	if err != nil {
+	if err != nil || records == nil {
 		return nil, err
 	}
 

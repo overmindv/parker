@@ -39,7 +39,7 @@ type OutboxDispatcher outbox.Dispatcher
 // NewOutboxDispatcher создаёт диспетчер.
 func NewOutboxDispatcher(store Outbox, producer *Producer, poll time.Duration, log *slog.Logger, metrics ...*Metrics) *OutboxDispatcher {
 	metric := (*observability.Metrics)(convert.First(metrics))
-	dispatcher := outbox.NewDispatcher(outbox.Adapt(store), (*kafka.Producer)(producer), poll, log, metric)
+	dispatcher := outbox.NewDispatcher(store, (*kafka.Producer)(producer), poll, log, metric)
 
 	return (*OutboxDispatcher)(dispatcher)
 }

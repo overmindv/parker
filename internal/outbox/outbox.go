@@ -67,11 +67,6 @@ CREATE INDEX IF NOT EXISTS outbox_sent_retention_idx ON outbox(sent_at,id) WHERE
 CREATE INDEX IF NOT EXISTS outbox_unsent_age_idx ON outbox(created_at) WHERE status<>'sent';
 `
 
-// claimedOutbox добавляет CAS, не меняя существующие реализации Outbox сервисов.
-type claimedOutbox interface {
-	MarkClaimSent(context.Context, Record) error
-}
-
 // publisher — публикация записи в Kafka (реализуется *Producer). Выделен
 // интерфейсом, чтобы диспетчер было легко юнит-тестировать без реального кластера.
 type publisher interface {
@@ -82,7 +77,7 @@ type publisher interface {
 // публикует их в Kafka и помечает отправленными. При ошибке публикации запись
 // остаётся pending (передоставится на следующем тике — бэкофф по next_attempt_at).
 type Dispatcher struct {
-	outbox   Outbox
+	outbox   dispatcherStore
 	producer publisher
 	poll     time.Duration
 	batch    int
@@ -91,7 +86,7 @@ type Dispatcher struct {
 }
 
 // NewDispatcher создаёт диспетчер.
-func NewDispatcher(outbox Outbox, producer *kafka.Producer, poll time.Duration, log *slog.Logger, metrics *observability.Metrics) *Dispatcher {
+func NewDispatcher[R ~recordFields](outbox store[R], producer *kafka.Producer, poll time.Duration, log *slog.Logger, metrics *observability.Metrics) *Dispatcher {
 	if poll <= 0 {
 		poll = 500 * time.Millisecond
 	}
@@ -102,7 +97,7 @@ func NewDispatcher(outbox Outbox, producer *kafka.Producer, poll time.Duration, 
 }
 
 // NewDispatcherWithPublisher — внутренний конструктор с инъекцией publish-интерфейса для тестов.
-func NewDispatcherWithPublisher(outbox Outbox, producer publisher, poll time.Duration, batch int, log *slog.Logger) *Dispatcher {
+func NewDispatcherWithPublisher[R ~recordFields](outbox store[R], producer publisher, poll time.Duration, batch int, log *slog.Logger) *Dispatcher {
 	if poll <= 0 {
 		poll = 500 * time.Millisecond
 	}
@@ -111,7 +106,7 @@ func NewDispatcherWithPublisher(outbox Outbox, producer publisher, poll time.Dur
 	}
 
 	return &Dispatcher{
-		outbox:   outbox,
+		outbox:   adapt(outbox),
 		producer: producer,
 		poll:     poll,
 		batch:    batch,
@@ -134,10 +129,7 @@ func (d *Dispatcher) Run(ctx context.Context) error {
 }
 
 func (d *Dispatcher) flushOnce(ctx context.Context) {
-	if store, ok := d.outbox.(interface {
-		QueueAge(context.Context) (time.Duration, error)
-		CleanupSent(context.Context, time.Duration, int) (int64, error)
-	}); ok {
+	if store := d.outbox.maintenance; store != nil {
 		if d.metrics != nil {
 			age, err := store.QueueAge(ctx)
 			if err == nil {
@@ -178,18 +170,16 @@ func (d *Dispatcher) flushOnce(ctx context.Context) {
 		if err != nil {
 			d.log.Error("outbox: не удалось опубликовать",
 				"id", rec.ID, "topic", rec.Topic)
-			if retry, ok := d.outbox.(interface {
-				MarkClaimFailed(context.Context, Record) error
-			}); ok {
-				if err := retry.MarkClaimFailed(ctx, rec); err != nil {
+			if retry := d.outbox.markClaimFailed; retry != nil {
+				if err := retry(ctx, rec); err != nil {
 					d.log.Warn("outbox reschedule failed", "id", rec.ID)
 				}
 			}
 
 			continue
 		}
-		if leased, ok := d.outbox.(claimedOutbox); ok {
-			if err := leased.MarkClaimSent(ctx, rec); err != nil {
+		if acknowledge := d.outbox.markClaimSent; acknowledge != nil {
+			if err := acknowledge(ctx, rec); err != nil {
 				d.log.Warn("outbox claim acknowledgement failed", "id", rec.ID)
 			}
 		} else {
