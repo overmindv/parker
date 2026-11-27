@@ -19,9 +19,10 @@ Kafka+outbox, метрики, жизненный цикл/graceful shutdown), ч
   `replace => ../parker` допустим только как временный локальный dev-приём и не коммитится.
 - Публичный API верхнего уровня (`Main`, `App`, `Options`, ...) — стабильный и минимальный.
   В корне только фасад и типы контракта; реализация — в `internal/<домен>`
-  (`observability`, `httpkit`, `kafka`, `outbox`, `postgres`, `migrate`, `lifecycle`,
-  `servicegen`, `cli`, `requestid`, `health`, `env`, `logging`). Раскладку корня
-  проверяет `architecture_test.go`.
+  (`app`, `config`, `convert`, `observability`, `httpkit`, `kafka`, `outbox`, `postgres`, `migrate`, `lifecycle`,
+  `servicegen`, `cli`, `requestid`, `health`, `env`, `logging`). Пакет `app` собирает сервер и управляет ресурсами;
+  `config` загружает, применяет и проверяет настройки. Тест `architecture_test.go`
+  проверяет состав корня и отсутствие управляющей логики в фасаде.
 - Не логировать `Options`/DSN целиком (секреты). `os.Exit` — только внутри `Main` (возврат кода).
 
 ## Команды

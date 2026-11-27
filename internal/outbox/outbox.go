@@ -13,7 +13,10 @@ import (
 )
 
 // Record — запись, ожидающая публикации в Kafka.
-type Record struct {
+type Record recordFields
+
+// Общая форма поддерживает преобразование записей без потери имени публичного типа.
+type recordFields = struct {
 	ID         string
 	Topic      string
 	Key        string
@@ -88,14 +91,12 @@ type Dispatcher struct {
 }
 
 // NewDispatcher создаёт диспетчер.
-func NewDispatcher(outbox Outbox, producer *kafka.Producer, poll time.Duration, log *slog.Logger, metrics ...*observability.Metrics) *Dispatcher {
+func NewDispatcher(outbox Outbox, producer *kafka.Producer, poll time.Duration, log *slog.Logger, metrics *observability.Metrics) *Dispatcher {
 	if poll <= 0 {
 		poll = 500 * time.Millisecond
 	}
 	d := NewDispatcherWithPublisher(outbox, producer, poll, 100, log)
-	if len(metrics) > 0 {
-		d.metrics = metrics[0]
-	}
+	d.metrics = metrics
 
 	return d
 }

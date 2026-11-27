@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/overmindv/parker/internal/convert"
 	"github.com/overmindv/parker/internal/kafka"
 	"github.com/overmindv/parker/internal/observability"
 	"github.com/overmindv/parker/internal/outbox"
@@ -37,11 +38,8 @@ type OutboxDispatcher outbox.Dispatcher
 
 // NewOutboxDispatcher создаёт диспетчер.
 func NewOutboxDispatcher(store Outbox, producer *Producer, poll time.Duration, log *slog.Logger, metrics ...*Metrics) *OutboxDispatcher {
-	var internalMetrics []*observability.Metrics
-	if len(metrics) > 0 {
-		internalMetrics = []*observability.Metrics{(*observability.Metrics)(metrics[0])}
-	}
-	dispatcher := outbox.NewDispatcher(adaptOutbox(store), (*kafka.Producer)(producer), poll, log, internalMetrics...)
+	metric := (*observability.Metrics)(convert.First(metrics))
+	dispatcher := outbox.NewDispatcher(outbox.Adapt(store), (*kafka.Producer)(producer), poll, log, metric)
 
 	return (*OutboxDispatcher)(dispatcher)
 }
@@ -61,16 +59,7 @@ func NewPgOutbox(pool *pgxpool.Pool) *PgOutbox {
 
 // FetchPending закрепляет строки одним коротким statement; publish не держит транзакцию.
 func (o *PgOutbox) FetchPending(ctx context.Context, limit int) ([]OutboxRecord, error) {
-	records, err := (*outbox.PgOutbox)(o).FetchPending(ctx, limit)
-	if err != nil {
-		return nil, err
-	}
-	converted := make([]OutboxRecord, 0, len(records))
-	for _, record := range records {
-		converted = append(converted, OutboxRecord(record))
-	}
-
-	return converted, nil
+	return outbox.FetchPendingAs[OutboxRecord]((*outbox.PgOutbox)(o), ctx, limit)
 }
 
 // MarkClaimSent не позволяет старому worker подтвердить новую lease.
@@ -101,59 +90,4 @@ func (o *PgOutbox) QueueAge(ctx context.Context) (time.Duration, error) {
 // CleanupSent удаляет только старые sent небольшим batch, не трогая pending/exhausted.
 func (o *PgOutbox) CleanupSent(ctx context.Context, retention time.Duration, limit int) (int64, error) {
 	return (*outbox.PgOutbox)(o).CleanupSent(ctx, retention, limit)
-}
-
-// fullOutbox — возможности PgOutbox, которые диспетчер использует через type assertion.
-type fullOutbox interface {
-	MarkClaimSent(context.Context, OutboxRecord) error
-	MarkClaimFailed(context.Context, OutboxRecord) error
-	QueueAge(context.Context) (time.Duration, error)
-	CleanupSent(context.Context, time.Duration, int) (int64, error)
-}
-
-type outboxAdapter struct{ store Outbox }
-
-func (a outboxAdapter) FetchPending(ctx context.Context, limit int) ([]outbox.Record, error) {
-	records, err := a.store.FetchPending(ctx, limit)
-	if err != nil {
-		return nil, err
-	}
-	converted := make([]outbox.Record, 0, len(records))
-	for _, record := range records {
-		converted = append(converted, outbox.Record(record))
-	}
-
-	return converted, nil
-}
-
-func (a outboxAdapter) MarkSent(ctx context.Context, ids []string) error {
-	return a.store.MarkSent(ctx, ids)
-}
-
-type fullOutboxAdapter struct{ outboxAdapter }
-
-func (a fullOutboxAdapter) MarkClaimSent(ctx context.Context, rec outbox.Record) error {
-	return a.store.(fullOutbox).MarkClaimSent(ctx, OutboxRecord(rec))
-}
-
-func (a fullOutboxAdapter) MarkClaimFailed(ctx context.Context, rec outbox.Record) error {
-	return a.store.(fullOutbox).MarkClaimFailed(ctx, OutboxRecord(rec))
-}
-
-func (a fullOutboxAdapter) QueueAge(ctx context.Context) (time.Duration, error) {
-	return a.store.(fullOutbox).QueueAge(ctx)
-}
-
-func (a fullOutboxAdapter) CleanupSent(ctx context.Context, retention time.Duration, limit int) (int64, error) {
-	return a.store.(fullOutbox).CleanupSent(ctx, retention, limit)
-}
-
-// adaptOutbox сохраняет опциональные возможности PgOutbox для диспетчера.
-func adaptOutbox(store Outbox) outbox.Outbox {
-	base := outboxAdapter{store: store}
-	if _, ok := store.(fullOutbox); ok {
-		return fullOutboxAdapter{outboxAdapter: base}
-	}
-
-	return base
 }

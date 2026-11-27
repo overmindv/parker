@@ -2,8 +2,6 @@ package parker
 
 import (
 	"context"
-	"log/slog"
-	"net/url"
 
 	"github.com/overmindv/parker/internal/observability"
 	"github.com/twmb/franz-go/pkg/kgo"
@@ -35,18 +33,4 @@ func TraceIDFrom(ctx context.Context) string {
 // SpanIDFrom возвращает span_id из контекста (пусто, если не задан).
 func SpanIDFrom(ctx context.Context) string {
 	return observability.SpanIDFrom(ctx)
-}
-
-func (o TraceOptions) collectorEndpoint(environment, service string) (*url.URL, error) {
-	return observability.ResolveEndpoint(o.Endpoint, o.SampleRatio, environment, service)
-}
-
-func newTraceRuntime(options Options, log *slog.Logger) (*observability.Runtime, error) {
-	return observability.NewRuntime(
-		options.Tracing.Endpoint,
-		options.Tracing.SampleRatio,
-		options.ServiceName,
-		options.Environment,
-		log,
-	)
 }

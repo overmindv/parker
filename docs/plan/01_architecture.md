@@ -9,29 +9,31 @@ parker/                                  module github.com/overmindv/parker
 ├── CLAUDE.md                            (инструкции для агента, работающего с parker)
 ├── AGENTS.md
 ├── .github/workflows/ci.yml             (linter + test + build + component для САМОГО parker)
-├── run.go                               parker.Run / parker.Main / parker.WithAppName
-├── app.go                               тип App (связка конфиг/логгер/pg/kafka/http/health)
-├── options.go                           Options: конфигурация parker (дефолты + валидация)
-├── config.go                            загрузка env в Options (helpers env/envDuration/envInt64/envList)
-├── log.go                               сборка *slog.Logger (JSON, уровень)
-├── lifecycle.go                         Runner: signals, graceful shutdown, runnables
-├── health.go                            HealthRegistry + тип HealthCheck
-├── metrics.go                           prometheus-регистр + метрики запросов
-├── migrate.go                           подкоманда migrate (goose-библиотека)
-├── cmd/parker/main.go                   CLI entrypoint: dispatch serve|migrate|init
-│   └── internal/init/                   реализация `parker init`
-├── internal/...                         неэкспортируемые детали фреймворка
-├── template/                            go:embed-шаблоны каркаса сервиса («parker init»)
-│   └── service/                         .tmpl-файлы: main.go, Makefile, Dockerfile, CI, .env.example, ...
-└── example/                             эталонный сервис на parker (используется в тестах)
+├── app.go, options.go, config.go        публичные App, Main, Options и функции конфигурации
+├── kafka.go, outbox.go, postgres.go     публичные контракты хранилищ и клиентов
+├── health.go, metrics.go, ...          публичные типы и делегирование по доменам
+├── cmd/parker/main.go                  точка входа CLI
+└── internal/
+    ├── app/                            подкоманды, сборка сервера, управление ресурсами
+    ├── config/, env/                   опции, значения по умолчанию, загрузка и валидация
+    ├── httpkit/, requestid/, health/   HTTP-обработчики и проверки готовности
+    ├── observability/, logging/        метрики, трейсинг и структурные логи
+    ├── postgres/, migrate/             пул PostgreSQL и goose-миграции
+    ├── kafka/, outbox/                 клиенты Kafka, очередь и адаптеры хранилищ
+    ├── lifecycle/                      Runner и graceful shutdown
+    ├── convert/                        преобразование коллекций на границе фасада
+    └── cli/, servicegen/               migrate, init и встроенные шаблоны сервиса
 ```
 
-**Принцип пакетов:** верхний уровень `parker` экспортирует ограниченный, стабильный API
-(`Main`, `App`, `Options`, `NewHealthCheck`, ...). Всё остальное — приватные пакеты.
-Подпапки с реализацией инфраструктуры (postgres/kafka/httpsrv) могут быть публичными, если нужны
-сервису для расширения, но по умолчанию — `internal/`.
+Корневой пакет определяет публичные типы и делегирует операции внутренним пакетам.
+Сервисы используют `parker.Main`, `parker.App`, `parker.Options` и остальные
+публичные контракты. Тест `architecture_test.go` проверяет расположение пакетов и
+объявления фасада, включая отсутствие управляющей логики.
 
 ## Ключевые типы (целевой контракт)
+
+Ниже сохранены проектные эскизы фаз разработки. Актуальные сигнатуры публикует
+`go doc -all github.com/overmindv/parker`.
 
 ```go
 // Файл: parker/app.go
