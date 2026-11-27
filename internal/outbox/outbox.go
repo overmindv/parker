@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/overmindv/parker/internal/kafka"
 	"github.com/overmindv/parker/internal/observability"
+	"github.com/overmindv/parker/internal/outbox/schema"
 )
 
 // Record — запись, ожидающая публикации в Kafka.
@@ -33,39 +34,12 @@ type Outbox interface {
 	MarkSent(ctx context.Context, ids []string) error
 }
 
-// Schema — DDL таблицы outbox по умолчанию. Сервис накатывает её своей миграцией.
-const Schema = `
-CREATE TABLE IF NOT EXISTS outbox (
-    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    topic           TEXT NOT NULL,
-    message_key     TEXT NOT NULL,
-    message_value   BYTEA NOT NULL,
-    status          TEXT NOT NULL DEFAULT 'pending',
-    attempts        INT  NOT NULL DEFAULT 0,
-    next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
-    sent_at         TIMESTAMPTZ,
- claim_token UUID,
- lease_until TIMESTAMPTZ,
- replay_generation INT NOT NULL DEFAULT 0
-);
-CREATE INDEX IF NOT EXISTS outbox_status_idx ON outbox(status, next_attempt_at);
-` + RetryMigration
-
-// LeaseMigration — append-only миграция владельца перед обновлением worker.
-const LeaseMigration = `ALTER TABLE outbox ADD COLUMN IF NOT EXISTS claim_token UUID;
-ALTER TABLE outbox ADD COLUMN IF NOT EXISTS lease_until TIMESTAMPTZ;
-CREATE INDEX IF NOT EXISTS outbox_lease_idx ON outbox(status,lease_until);`
-
-// RetryMigration применяется новой append-only миграцией владельца.
-const RetryMigration = `ALTER TABLE outbox ADD COLUMN IF NOT EXISTS replay_generation INT NOT NULL DEFAULT 0;
-CREATE TABLE IF NOT EXISTS outbox_replay_audit (
- outbox_id UUID NOT NULL, generation INT NOT NULL, actor_id UUID NOT NULL,
- created_at TIMESTAMPTZ NOT NULL DEFAULT now(), PRIMARY KEY(outbox_id,generation)
-);
-CREATE INDEX IF NOT EXISTS outbox_sent_retention_idx ON outbox(sent_at,id) WHERE status='sent';
-CREATE INDEX IF NOT EXISTS outbox_unsent_age_idx ON outbox(created_at) WHERE status<>'sent';
-`
+// Схема и owner-миграции также доступны генератору до создания Jet-моделей.
+const (
+	Schema         = schema.Schema
+	LeaseMigration = schema.LeaseMigration
+	RetryMigration = schema.RetryMigration
+)
 
 // publisher — публикация записи в Kafka (реализуется *Producer). Выделен
 // интерфейсом, чтобы диспетчер было легко юнит-тестировать без реального кластера.
@@ -212,11 +186,8 @@ func (o *PgOutbox) FetchPending(ctx context.Context, limit int) ([]Record, error
 	if limit > 100 {
 		limit = 100
 	}
-	rows, err := o.pool.Query(ctx, `WITH ready AS (
- SELECT id FROM outbox WHERE (status='pending' AND next_attempt_at<=now())
- OR (status='publishing' AND lease_until<=now()) ORDER BY created_at,id LIMIT $1 FOR UPDATE SKIP LOCKED
- ) UPDATE outbox o SET status='publishing',claim_token=gen_random_uuid(),lease_until=now()+interval '30 seconds'
- FROM ready WHERE o.id=ready.id RETURNING o.id,o.topic,o.message_key,o.message_value,o.claim_token,o.lease_until,o.attempts`, limit)
+	query, args := claimPending(limit).Sql()
+	rows, err := o.pool.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("outbox claim: %w", err)
 	}
@@ -235,8 +206,8 @@ func (o *PgOutbox) FetchPending(ctx context.Context, limit int) ([]Record, error
 
 // MarkClaimSent не позволяет старому worker подтвердить новую lease.
 func (o *PgOutbox) MarkClaimSent(ctx context.Context, rec Record) error {
-	tag, err := o.pool.Exec(ctx, `UPDATE outbox SET status='sent',sent_at=now(),claim_token=NULL,lease_until=NULL,attempts=attempts+1
- WHERE id=$1 AND claim_token=$2 AND status='publishing' AND lease_until>now()`, rec.ID, rec.ClaimToken)
+	query, args := markClaimSent(rec).Sql()
+	tag, err := o.pool.Exec(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("outbox mark claim: %w", err)
 	}
@@ -252,10 +223,8 @@ func (o *PgOutbox) MarkSent(ctx context.Context, ids []string) error {
 	if len(ids) == 0 {
 		return nil
 	}
-	tag, err := o.pool.Exec(ctx, `
-		UPDATE outbox
-		SET status = 'sent', sent_at = now(), attempts = attempts + 1
-		WHERE id = ANY($1) AND status='pending' AND claim_token IS NULL`, ids)
+	query, args := markSent(ids).Sql()
+	tag, err := o.pool.Exec(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("outbox mark sent: %w", err)
 	}

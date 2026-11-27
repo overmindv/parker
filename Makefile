@@ -33,3 +33,14 @@ $(GOLANGCI_LINT):
 # Проверка тега после публикации; сгенерированный сервис не использует replace.
 release-check:
 	scripts/verify-release.sh "$(RELEASE_VERSION)"
+
+.PHONY: jet-db jet-generate jet-check
+jet-db:
+	docker compose -f compose.jet.yaml up -d --wait
+	go run ./internal/cmd/jetdb
+
+jet-generate:
+	@sh scripts/jet.sh generate
+
+jet-check:
+	@sh scripts/jet.sh check

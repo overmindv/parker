@@ -33,10 +33,8 @@ func retryAt(now time.Time, attempt int, jitter float64) time.Time {
 // MarkClaimFailed сохраняет расписание, не сохраняя raw broker errors или payload.
 func (o *PgOutbox) MarkClaimFailed(ctx context.Context, rec Record) error {
 	next := retryAt(o.now(), rec.Attempts+1, rand.Float64()) //nolint:gosec // jitter не используется для криптографии
-	tag, err := o.pool.Exec(ctx, `UPDATE outbox SET attempts=attempts+1,
- status=CASE WHEN attempts+1 >= $3 THEN 'exhausted' ELSE 'pending' END,
- next_attempt_at=$4,claim_token=NULL,lease_until=NULL
- WHERE id=$1 AND claim_token=$2 AND status='publishing' AND lease_until>now()`, rec.ID, rec.ClaimToken, maxAttempts, next)
+	query, args := markClaimFailed(rec, next).Sql()
+	tag, err := o.pool.Exec(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("outbox reschedule: %w", err)
 	}
@@ -53,10 +51,8 @@ func (o *PgOutbox) ReplayExhausted(ctx context.Context, id string, generation in
 	if !admin || actor == "" {
 		return fmt.Errorf("administrator required")
 	}
-	tag, err := o.pool.Exec(ctx, `WITH replayed AS (
- UPDATE outbox SET status='pending',attempts=0,next_attempt_at=now(),claim_token=NULL,lease_until=NULL,replay_generation=replay_generation+1
- WHERE id=$1 AND status='exhausted' AND replay_generation=$2 RETURNING id,replay_generation
- ) INSERT INTO outbox_replay_audit(outbox_id,generation,actor_id) SELECT id,replay_generation,$3::uuid FROM replayed`, id, generation, actor)
+	query, args := replayExhausted(id, generation, actor).Sql()
+	tag, err := o.pool.Exec(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("outbox replay: %w", err)
 	}
@@ -70,7 +66,8 @@ func (o *PgOutbox) ReplayExhausted(ctx context.Context, id string, generation in
 // QueueAge — возраст старейшего неотправленного события, включая exhausted.
 func (o *PgOutbox) QueueAge(ctx context.Context) (time.Duration, error) {
 	var seconds float64
-	err := o.pool.QueryRow(ctx, `SELECT COALESCE(GREATEST(EXTRACT(EPOCH FROM now()-min(created_at)),0),0)::float8 FROM outbox WHERE status<>'sent'`).Scan(&seconds)
+	query, args := queueAge().Sql()
+	err := o.pool.QueryRow(ctx, query, args...).Scan(&seconds)
 
 	return time.Duration(seconds * float64(time.Second)), err
 }
@@ -83,8 +80,8 @@ func (o *PgOutbox) CleanupSent(ctx context.Context, retention time.Duration, lim
 	if limit <= 0 || limit > 1000 {
 		limit = 1000
 	}
-	tag, err := o.pool.Exec(ctx, `WITH stale AS (SELECT id FROM outbox WHERE status='sent' AND sent_at<$1 ORDER BY sent_at LIMIT $2 FOR UPDATE SKIP LOCKED)
- DELETE FROM outbox WHERE id IN (SELECT id FROM stale)`, o.now().Add(-retention), limit)
+	query, args := cleanupSent(o.now().Add(-retention), limit).Sql()
+	tag, err := o.pool.Exec(ctx, query, args...)
 
 	return tag.RowsAffected(), err
 }

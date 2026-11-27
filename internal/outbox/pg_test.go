@@ -166,6 +166,10 @@ func TestPgOutboxRetryExhaustionReplayAndRetention(t *testing.T) {
 	if err = o.ReplayExhausted(ctx, id, 0, actor, false); err == nil {
 		t.Fatal("nonadmin replay")
 	}
+	// Ошибка вставки аудита должна откатить изменение поколения и статуса.
+	if err = o.ReplayExhausted(ctx, id, 0, "invalid-uuid", true); err == nil {
+		t.Fatal("accepted invalid audit actor")
+	}
 	if err = o.ReplayExhausted(ctx, id, 0, actor, true); err != nil {
 		t.Fatal(err)
 	}
@@ -200,4 +204,72 @@ func testDSN(t *testing.T) string {
 	}
 
 	return dsn
+}
+
+func TestClaimSkipsLockedOldestRow(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	pool, err := postgres.OpenPool(ctx, testDSN(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	if _, err := pool.Exec(ctx, Schema); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `DELETE FROM outbox;
+INSERT INTO outbox(topic,message_key,message_value,created_at) VALUES
+('t','locked','v',now()-interval '1 hour'),('t','ready','v',now())`); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `SELECT id FROM outbox WHERE message_key='locked' FOR UPDATE`); err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := NewPgOutbox(pool).FetchPending(ctx, 1)
+	if err != nil || len(claimed) != 1 || claimed[0].Key != "ready" {
+		t.Fatalf("claim with locked oldest row: %v %v", claimed, err)
+	}
+}
+
+func TestMarkSentOnlyAcknowledgesUnclaimedRows(t *testing.T) {
+	ctx := context.Background()
+	pool, err := postgres.OpenPool(ctx, testDSN(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	if _, err = pool.Exec(ctx, Schema); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `DELETE FROM outbox;
+INSERT INTO outbox(topic,message_key,message_value,created_at) VALUES
+('t','leased','v',now()-interval '1 hour'),('t','first','v',now()),('t','second','v',now())`); err != nil {
+		t.Fatal(err)
+	}
+
+	store := NewPgOutbox(pool)
+	claimed, err := store.FetchPending(ctx, 1)
+	if err != nil || len(claimed) != 1 {
+		t.Fatalf("claim: %v %v", claimed, err)
+	}
+	if err = store.MarkSent(ctx, []string{claimed[0].ID}); err == nil {
+		t.Fatal("lease acknowledged without claim token")
+	}
+
+	var firstID, secondID string
+	if err = pool.QueryRow(ctx, `SELECT a.id,b.id FROM outbox a, outbox b WHERE a.message_key='first' AND b.message_key='second'`).Scan(&firstID, &secondID); err != nil {
+		t.Fatal(err)
+	}
+	if err = store.MarkSent(ctx, []string{firstID, secondID}); err != nil {
+		t.Fatal(err)
+	}
+	var sentCount int
+	if err = pool.QueryRow(ctx, `SELECT count(*) FROM outbox WHERE status='sent' AND attempts=1 AND sent_at IS NOT NULL`).Scan(&sentCount); err != nil || sentCount != 2 {
+		t.Fatalf("sent rows: %d %v", sentCount, err)
+	}
 }
