@@ -26,11 +26,6 @@ func (r *Runner) AddRunnable(name string, fn Runnable) {
 	(*lifecycle.Runner)(r).AddRunnable(name, lifecycle.Runnable(fn))
 }
 
-// SetAfterShutdown задаёт хук, выполняемый после остановки сервера и воркеров.
-func (r *Runner) SetAfterShutdown(fn func(context.Context)) {
-	(*lifecycle.Runner)(r).SetAfterShutdown(fn)
-}
-
 // Run запускает сервер и воркеры и блокирует до завершения.
 func (r *Runner) Run(ctx context.Context, server *http.Server) error {
 	return (*lifecycle.Runner)(r).Run(ctx, server)
