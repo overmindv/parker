@@ -1,8 +1,12 @@
-package parker
+// Package cli реализует подкоманды migrate и init.
+package cli
 
 import (
 	"fmt"
 	"os"
+
+	"github.com/overmindv/parker/internal/migrate"
+	"github.com/overmindv/parker/internal/servicegen"
 )
 
 // runMigrateCLI — обработчик подкоманды migrate:
@@ -10,7 +14,7 @@ import (
 //	parker migrate [--dir migrations] [--dsn postgres://...] (up|down|status)
 //
 // По умолчанию: dir=migrations, dsn=env DATABASE_URL, command=up.
-func runMigrateCLI(args []string) int {
+func Migrate(args []string) int {
 	dir := "migrations"
 	dsn := os.Getenv("DATABASE_URL")
 	command := "up"
@@ -32,7 +36,7 @@ func runMigrateCLI(args []string) int {
 		}
 	}
 
-	if err := RunMigrate(dir, dsn, command); err != nil {
+	if err := migrate.RunMigrate(dir, dsn, command); err != nil {
 		fmt.Fprintf(os.Stderr, "parker: migrate: %v\n", err)
 
 		return 1
@@ -47,7 +51,7 @@ func runMigrateCLI(args []string) int {
 //	parker init <service-name> [--pg|--no-pg] [--kafka|--no-kafka]
 //
 // Генерирует каркас сервиса в текущем каталоге и печатает compose-блок и чек-лист.
-func runInitCLI(args []string) int {
+func Init(args []string) int {
 	var name string
 	hasPG := true
 	hasKafka := false
@@ -74,15 +78,15 @@ func runInitCLI(args []string) int {
 		return 2
 	}
 
-	if err := GenerateService(".", name, hasPG, hasKafka); err != nil {
+	if err := servicegen.GenerateService(".", name, hasPG, hasKafka); err != nil {
 		fmt.Fprintf(os.Stderr, "parker: init: %v\n", err)
 
 		return 1
 	}
 
 	fmt.Fprintf(os.Stderr, "parker: init %q: каркас создан в текущем каталоге\n", name)
-	PrintComposeBlock(os.Stdout, name, hasPG, hasKafka)
-	PrintPostInitChecklist(os.Stdout, name)
+	servicegen.PrintComposeBlock(os.Stdout, name, hasPG, hasKafka)
+	servicegen.PrintPostInitChecklist(os.Stdout, name)
 
 	return 0
 }

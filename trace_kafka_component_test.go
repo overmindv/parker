@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/overmindv/parker/internal/requestid"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/kmsg"
 	tracepb "go.opentelemetry.io/proto/otlp/trace/v1"
@@ -33,7 +34,7 @@ func TestKafkaTraceHTTPToBrokerAndHandler(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer client.Close()
-	topic := "parker-private-topic-" + newRequestID()
+	topic := "parker-private-topic-" + requestid.New()
 	request := kmsg.NewPtrCreateTopicsRequest()
 	request.Topics = []kmsg.CreateTopicsRequestTopic{{Topic: topic, NumPartitions: 1, ReplicationFactor: 1}}
 	created, err := request.RequestWith(ctx, client)
@@ -51,7 +52,7 @@ func TestKafkaTraceHTTPToBrokerAndHandler(t *testing.T) {
 	t.Cleanup(sender.closeAll)
 	var attempts atomic.Int32
 	const key, payload = "private-user-key", "private-message-value"
-	subscriber, err := receiver.NewSubscriber("parker-trace-"+newRequestID(), []string{topic}, func(ctx context.Context, gotKey string, value []byte) error {
+	subscriber, err := receiver.NewSubscriber("parker-trace-"+requestid.New(), []string{topic}, func(ctx context.Context, gotKey string, value []byte) error {
 		if TraceIDFrom(ctx) != traceFixture[3:35] || SpanIDFrom(ctx) == "" || gotKey != key || string(value) != payload {
 			t.Error("Kafka handler did not receive context and unchanged payload")
 		}
@@ -91,7 +92,7 @@ func TestKafkaTraceHTTPToBrokerAndHandler(t *testing.T) {
 	if out.Code != http.StatusAccepted {
 		t.Fatal("HTTP request did not publish")
 	}
-	sender.tracing.shutdown(ctx)
+	sender.tracing.Shutdown(ctx)
 	tick := time.NewTicker(20 * time.Millisecond)
 	defer tick.Stop()
 	for {

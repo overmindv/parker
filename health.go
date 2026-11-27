@@ -3,7 +3,7 @@ package parker
 import (
 	"context"
 
-	internalhealth "github.com/overmindv/parker/internal/health"
+	"github.com/overmindv/parker/internal/health"
 )
 
 // HealthCheck — проверка готовности внешней зависимости (реализуется сервисом,
@@ -20,7 +20,7 @@ func (f HealthCheckFunc) Ping(ctx context.Context) error { return f(ctx) }
 
 // HealthRegistry хранит проверки готовности и агрегирует их в один Ready().
 type HealthRegistry struct {
-	registry internalhealth.Registry
+	registry health.Registry
 }
 
 // NewHealthRegistry создаёт пустой реестр.

@@ -1,4 +1,4 @@
-package parker
+package servicegen
 
 import (
 	"os"

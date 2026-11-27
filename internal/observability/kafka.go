@@ -1,4 +1,4 @@
-package parker
+package observability
 
 import (
 	"context"
@@ -8,7 +8,8 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-func (t *traceRuntime) kafkaSpan(ctx context.Context, operation string, kind trace.SpanKind) (context.Context, trace.Span) {
+// KafkaSpan создаёт спан операции с Kafka.
+func (t *Runtime) KafkaSpan(ctx context.Context, operation string, kind trace.SpanKind) (context.Context, trace.Span) {
 	ctx, span := t.tracer.Start(ctx, "kafka "+operation, trace.WithSpanKind(kind))
 	if span.IsRecording() {
 		span.SetAttributes(attribute.String("messaging.system.name", "kafka"),
@@ -18,7 +19,8 @@ func (t *traceRuntime) kafkaSpan(ctx context.Context, operation string, kind tra
 	return ctx, span
 }
 
-func markKafkaError(span trace.Span, reason string) {
+// MarkKafkaError помечает спан ошибкой обработки.
+func MarkKafkaError(span trace.Span, reason string) {
 	if span != nil && span.IsRecording() {
 		span.SetStatus(codes.Error, reason)
 	}

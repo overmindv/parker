@@ -1,4 +1,4 @@
-package parker
+package observability
 
 import (
 	"bytes"
@@ -17,22 +17,22 @@ import (
 )
 
 const (
-	maxOTLPRequest  = 1 << 20
-	maxOTLPResponse = 64 << 10
+	MaxOTLPRequest  = 1 << 20
+	MaxOTLPResponse = 64 << 10
 )
 
 var (
-	errTraceExport  = errors.New("trace batch export failed")
-	errTracePartial = errors.New("collector rejected some spans")
+	ErrTraceExport  = errors.New("trace batch export failed")
+	ErrTracePartial = errors.New("collector rejected some spans")
 )
 
 // OTLP Client не читает параметры транспорта из окружения и не пересылает экспорт по редиректу.
-type otlpClient struct {
+type OTLPClient struct {
 	endpoint string
 	client   *http.Client
 }
 
-func newOTLPClient(endpoint *url.URL) *otlpClient {
+func NewOTLPClient(endpoint *url.URL) *OTLPClient {
 	transport := &http.Transport{
 		DialContext:            (&net.Dialer{Timeout: traceExportTimeout}).DialContext,
 		TLSClientConfig:        &tls.Config{MinVersion: tls.VersionTLS12},
@@ -40,53 +40,53 @@ func newOTLPClient(endpoint *url.URL) *otlpClient {
 		MaxResponseHeaderBytes: 16 << 10, MaxConnsPerHost: 2, MaxIdleConns: 2, IdleConnTimeout: 30 * time.Second,
 	}
 
-	return &otlpClient{
+	return &OTLPClient{
 		endpoint: endpoint.String(),
 		client: &http.Client{Transport: transport, Timeout: traceExportTimeout,
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
 	}
 }
 
-func (*otlpClient) Start(context.Context) error { return nil }
+func (*OTLPClient) Start(context.Context) error { return nil }
 
-func (c *otlpClient) Stop(context.Context) error {
+func (c *OTLPClient) Stop(context.Context) error {
 	c.client.CloseIdleConnections()
 
 	return nil
 }
 
-func (c *otlpClient) UploadTraces(ctx context.Context, spans []*tracepb.ResourceSpans) error {
+func (c *OTLPClient) UploadTraces(ctx context.Context, spans []*tracepb.ResourceSpans) error {
 	message := &collectorpb.ExportTraceServiceRequest{ResourceSpans: spans}
-	if proto.Size(message) > maxOTLPRequest {
-		return errTraceExport
+	if proto.Size(message) > MaxOTLPRequest {
+		return ErrTraceExport
 	}
 	body, err := proto.Marshal(message)
 	if err != nil {
-		return errTraceExport
+		return ErrTraceExport
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint, bytes.NewReader(body))
 	if err != nil {
-		return errTraceExport
+		return ErrTraceExport
 	}
 	req.Header.Set("Content-Type", "application/x-protobuf")
 	resp, err := c.client.Do(req)
 	if err != nil {
-		return errTraceExport
+		return ErrTraceExport
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
-		return errTraceExport
+		return ErrTraceExport
 	}
-	body, err = io.ReadAll(io.LimitReader(resp.Body, maxOTLPResponse+1))
-	if err != nil || len(body) > maxOTLPResponse {
-		return errTraceExport
+	body, err = io.ReadAll(io.LimitReader(resp.Body, MaxOTLPResponse+1))
+	if err != nil || len(body) > MaxOTLPResponse {
+		return ErrTraceExport
 	}
 	var reply collectorpb.ExportTraceServiceResponse
 	if err := proto.Unmarshal(body, &reply); err != nil {
-		return errTraceExport
+		return ErrTraceExport
 	}
 	if partial := reply.GetPartialSuccess(); partial.GetRejectedSpans() > 0 || partial.GetErrorMessage() != "" {
-		return errTracePartial
+		return ErrTracePartial
 	}
 
 	return nil

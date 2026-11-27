@@ -1,179 +1,27 @@
 package parker
 
 import (
-	"bytes"
-	"embed"
-	"fmt"
-	"go/format"
 	"io"
-	"os"
-	"path/filepath"
-	"regexp"
-	"strings"
-	"text/template"
-	"time"
+
+	"github.com/overmindv/parker/internal/servicegen"
 )
-
-//go:embed template/service/*.tmpl
-var serviceTemplates embed.FS
-
-// serviceData — параметры подстановки в шаблоны каркаса сервиса.
-type serviceData struct {
-	ServiceName string
-	GoModule    string
-	HasPG       bool
-	HasKafka    bool
-}
-
-var serviceNameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,39}$`)
 
 // ValidateServiceName проверяет имя сервиса.
 func ValidateServiceName(name string) error {
-	if !serviceNameRe.MatchString(name) {
-		return fmt.Errorf("недопустимое имя сервиса %q: строчные латинские буквы, цифры и '-', 1–40 символов, начинается с буквы или цифры", name)
-	}
-
-	return nil
+	return servicegen.ValidateServiceName(name)
 }
 
 // GenerateService создаёт каркас сервиса name в каталоге dir из встроенных шаблонов.
 func GenerateService(dir, name string, hasPG, hasKafka bool) error {
-	if err := ValidateServiceName(name); err != nil {
-		return err
-	}
-	data := serviceData{
-		ServiceName: name,
-		GoModule:    "github.com/overmindv/" + name,
-		HasPG:       hasPG,
-		HasKafka:    hasKafka,
-	}
-	if err := os.MkdirAll(dir, 0o755); err != nil { //nolint:gosec // сгенерированный проект должен быть доступен локальным инструментам
-		return err
-	}
-
-	files := []struct {
-		tmpl, out string
-		cond      bool
-	}{
-		{"template/service/go.mod.tmpl", "go.mod", true},
-		{"template/service/main.go.tmpl", filepath.Join("cmd", name, "main.go"), true},
-		{"template/service/main_test.go.tmpl", filepath.Join("cmd", name, "main_test.go"), true},
-		{"template/service/Makefile.tmpl", "Makefile", true},
-		{"template/service/Dockerfile.tmpl", "Dockerfile", true},
-		{"template/service/env.example.tmpl", ".env.example", true},
-		{"template/service/gitignore.tmpl", ".gitignore", true},
-		{"template/service/ci.yml.tmpl", filepath.Join(".github", "workflows", "ci.yml"), true},
-		{"template/service/README.md.tmpl", "README.md", true},
-		{"template/service/migrations_0001_init.sql.tmpl", filepath.Join("migrations", time.Now().UTC().Format("20060102")+"0001_init.sql"), hasPG},
-	}
-	for _, f := range files {
-		if !f.cond {
-			continue
-		}
-		if err := renderServiceFile(data, f.tmpl, filepath.Join(dir, f.out)); err != nil {
-			return fmt.Errorf("сгенерировать %s: %w", f.out, err)
-		}
-	}
-	if err := generateInternalSkeleton(dir, name); err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func renderServiceFile(data serviceData, tmplPath, outPath string) error {
-	raw, err := serviceTemplates.ReadFile(tmplPath)
-	if err != nil {
-		return err
-	}
-	tmpl, err := template.New(filepath.Base(tmplPath)).Parse(string(raw))
-	if err != nil {
-		return err
-	}
-	var buf bytes.Buffer
-	if executeErr := tmpl.Execute(&buf, data); executeErr != nil {
-		return executeErr
-	}
-	if mkdirErr := os.MkdirAll(filepath.Dir(outPath), 0o755); mkdirErr != nil { //nolint:gosec // каталоги исходников имеют стандартные права 0755
-		return mkdirErr
-	}
-	content := buf.Bytes()
-	if strings.HasSuffix(outPath, ".go") {
-		content, err = format.Source(content)
-		if err != nil {
-			return err
-		}
-	}
-
-	return os.WriteFile(outPath, content, 0o644) //nolint:gosec // исходники и документация не содержат секретов
-}
-
-// generateInternalSkeleton создаёт структуру каталогов бизнес-логики с подсказками.
-func generateInternalSkeleton(dir, name string) error {
-	base := filepath.Join(dir, "internal", name)
-	places := []struct {
-		rel, hint string
-	}{
-		{"domain", "Бизнес-типы и инварианты."},
-		{"usecase", "Сценарии/оркестрация. Boundary транзакций — здесь."},
-		{"repository", "Persistence-интерфейс."},
-		{"transport", "HTTP-обработчики; регистрируются на app.HTTP()."},
-	}
-	for _, p := range places {
-		pdir := filepath.Join(base, p.rel)
-		if err := os.MkdirAll(pdir, 0o755); err != nil { //nolint:gosec // каталоги исходников имеют стандартные права 0755
-			return err
-		}
-		readme := "# " + name + "/" + p.rel + "\n\n" + p.hint + "\n"
-		if err := os.WriteFile(filepath.Join(pdir, "README.md"), []byte(readme), 0o644); err != nil { //nolint:gosec // README не содержит секретов
-			return err
-		}
-	}
-
-	return nil
+	return servicegen.GenerateService(dir, name, hasPG, hasKafka)
 }
 
 // PrintComposeBlock печатает готовый блок docker-compose для вставки в infra.
 func PrintComposeBlock(w io.Writer, name string, hasPG, hasKafka bool) {
-	pf := func(format string, args ...any) { _, _ = fmt.Fprintf(w, format, args...) } // игнорируем ошибку записи
-	if hasPG {
-		pf("# Вставьте в infra/docker-compose.yml и добавьте %s_POSTGRES_PASSWORD=__GENERATE__ в infra/.env.example\n", strings.ToUpper(name))
-		pf("  %s-postgres:\n", name)
-		pf("    image: postgres:17-alpine\n")
-		pf("    environment: { POSTGRES_DB: %s, POSTGRES_USER: %s, POSTGRES_PASSWORD: \"${%s_POSTGRES_PASSWORD:?set in .env}\" }\n", name, name, strings.ToUpper(name))
-		pf("    volumes: [ %s-postgres-data:/var/lib/postgresql/data ]\n", name)
-		pf("    healthcheck: { test: [\"CMD-SHELL\",\"pg_isready -U %s -d %s\"], interval: 5s, timeout: 3s, retries: 20 }\n\n", name, name)
-
-		pf("  %s-migrate:\n", name)
-		pf("    build: { context: ../%s, args: { GOPROXY: \"${GOPROXY:-https://proxy.golang.org,direct}\" } }\n", name)
-		pf("    entrypoint: [\"%s\", \"migrate\", \"--dir\", \"migrations\", \"up\"]\n", name)
-		pf("    environment:\n      DATABASE_URL: \"postgres://%s:${%s_POSTGRES_PASSWORD}@%s-postgres:5432/%s?sslmode=disable\"\n\n",
-			name, strings.ToUpper(name), name, name)
-
-	}
-	pf("  %s:\n", name)
-	pf("    build: { context: ../%s, args: { GOPROXY: \"${GOPROXY:-https://proxy.golang.org,direct}\" } }\n", name)
-	pf("    environment:\n      SERVICE_NAME: %s\n      HTTP_ADDR: \":8080\"\n      ENV: local\n", name)
-	if hasPG {
-		pf("      DATABASE_URL: \"postgres://%s:${%s_POSTGRES_PASSWORD}@%s-postgres:5432/%s?sslmode=disable\"\n",
-			name, strings.ToUpper(name), name, name)
-	}
-	if hasKafka {
-		pf("      KAFKA_BOOTSTRAP_SERVERS: \"kafka:9092\"\n")
-	}
-	if hasPG {
-		pf("    depends_on:\n      %s-migrate: { condition: service_completed_successfully }\n", name)
-	}
-	pf("    healthcheck:\n      test: [\"CMD-SHELL\",\"wget -qO- http://127.0.0.1:8080/ready >/dev/null\"]\n      interval: 5s\n      timeout: 3s\n      retries: 20\n      start_period: 5s\n    restart: unless-stopped\n")
+	servicegen.PrintComposeBlock(w, name, hasPG, hasKafka)
 }
 
 // PrintPostInitChecklist печатает чек-лист (Части 1–5) после создания сервиса.
 func PrintPostInitChecklist(w io.Writer, name string) {
-	pf := func(format string, args ...any) { _, _ = fmt.Fprintf(w, format, args...) } // игнорируем ошибку записи
-	pf("\nСервис %q создан. Дальше (workflow Частей 1–5, см. parker/docs/plan/08_service_bootstrap.md):\n", name)
-	pf("  Часть 2: вставьте compose-блок выше в infra/docker-compose.yml, добавьте переменные в .env.\n")
-	pf("  Часть 2: go mod tidy && make dev (нужна PostgreSQL).\n")
-	pf("  Часть 3: запишите, проверьте пайплайны GitHub Actions (lint/test/build/component).\n")
-	pf("  Часть 4: проверьте /health /ready /metrics, логи и trace.\n")
-	pf("  Часть 5: реализуйте бизнес-логику в internal/%s/.\n", name)
+	servicegen.PrintPostInitChecklist(w, name)
 }

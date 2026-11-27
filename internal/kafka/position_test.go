@@ -1,4 +1,4 @@
-package parker
+package kafka
 
 import (
 	"context"

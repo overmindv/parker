@@ -2,254 +2,114 @@ package parker
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
-	"time"
 
+	"github.com/overmindv/parker/internal/kafka"
 	"github.com/twmb/franz-go/pkg/kgo"
-	"go.opentelemetry.io/otel/trace"
 )
 
 // Producer — тонкая обёртка над franz-go клиентом для публикации записей.
 // Реализует HealthCheck (Ping) для /ready.
-type Producer struct {
-	client  *kgo.Client
-	tracing *traceRuntime
-}
+type Producer kafka.Producer
 
 // NewProducer создаёт producer к заданным брокерам.
 func NewProducer(brokers []string, security ...KafkaSecurity) (*Producer, error) {
-	if len(brokers) == 0 {
-		return nil, fmt.Errorf("не заданы kafka-брокеры")
-	}
-	opts, err := kafkaSecurityOptions(security...)
+	producer, err := kafka.NewProducer(brokers, internalSecurity(security)...)
 	if err != nil {
 		return nil, err
 	}
-	opts = append(opts, kgo.SeedBrokers(brokers...))
-	client, err := kgo.NewClient(opts...)
-	if err != nil {
-		return nil, fmt.Errorf("создать kafka producer: %w", err)
-	}
 
-	return &Producer{client: client}, nil
+	return (*Producer)(producer), nil
 }
 
 // Publish публикует запись в топик с ключом (обеспечивает порядок в partition).
 func (p *Producer) Publish(ctx context.Context, topic, key string, value []byte) error {
-	rec := &kgo.Record{Topic: topic, Key: []byte(key), Value: value}
-	var span trace.Span
-	if p.tracing != nil {
-		ctx, span = p.tracing.kafkaSpan(ctx, "send", trace.SpanKindProducer)
-		defer span.End()
-	}
-	InjectKafkaTrace(ctx, rec)
-	result := p.client.ProduceSync(ctx, rec)
-	if err := result.FirstErr(); err != nil {
-		markKafkaError(span, "publish_failed")
-
-		return fmt.Errorf("kafka publish %s: %w", topic, err)
-	}
-
-	return nil
+	return (*kafka.Producer)(p).Publish(ctx, topic, key, value)
 }
 
 // Ping проверяет доступность кластера.
 func (p *Producer) Ping(ctx context.Context) error {
-	return p.client.Ping(ctx)
+	return (*kafka.Producer)(p).Ping(ctx)
 }
 
 // Close закрывает клиент.
-func (p *Producer) Close() { p.client.Close() }
+func (p *Producer) Close() {
+	(*kafka.Producer)(p).Close()
+}
 
 // Handler — обработчик записи из подписки. Ключ задаёт семантику (тип события).
 type Handler func(ctx context.Context, key string, value []byte) error
 
 // RecordPosition содержит координаты записи без ключа, тела и заголовков.
-type RecordPosition struct {
-	Topic     string
-	Partition int32
-	Offset    int64
-}
-
-type positionKey struct{}
+type RecordPosition kafka.RecordPosition
 
 // PositionFromContext возвращает координаты записи внутри вызова Handler.
 func PositionFromContext(ctx context.Context) (RecordPosition, bool) {
-	position, ok := ctx.Value(positionKey{}).(RecordPosition)
+	position, ok := kafka.PositionFromContext(ctx)
 
-	return position, ok
+	return RecordPosition(position), ok
 }
 
 // Subscriber — consumer-group подписчик: читает топики, вызывает Handler.
 // Коммит offset'а выполняется после успешной обработки (at-least-once).
-type subscriberClient interface {
-	PollRecords(context.Context, int) kgo.Fetches
-	CommitRecords(context.Context, ...*kgo.Record) error
-	AllowRebalance()
-	Ping(context.Context) error
-	Close()
-}
-
-type Subscriber struct {
-	client  subscriberClient
-	log     *slog.Logger
-	handler Handler
-	tracing *traceRuntime
-}
+type Subscriber kafka.Subscriber
 
 // NewSubscriber создаёт consumer-group подписчика.
 func NewSubscriber(brokers []string, group string, topics []string, handler Handler, log *slog.Logger, security ...KafkaSecurity) (*Subscriber, error) {
-	if len(brokers) == 0 {
-		return nil, fmt.Errorf("не заданы kafka-брокеры")
-	}
-	if handler == nil {
-		return nil, fmt.Errorf("не задан handler подписчика")
-	}
-	opts, err := kafkaSecurityOptions(security...)
+	subscriber, err := kafka.NewSubscriber(brokers, group, topics, kafka.Handler(handler), log, internalSecurity(security)...)
 	if err != nil {
 		return nil, err
 	}
-	opts = append(opts,
-		kgo.SeedBrokers(brokers...),
-		kgo.ConsumerGroup(group),
-		kgo.ConsumeTopics(topics...),
-		kgo.DisableAutoCommit(),
-		kgo.BlockRebalanceOnPoll(),
-	)
-	client, err := kgo.NewClient(opts...)
-	if err != nil {
-		return nil, fmt.Errorf("создать kafka consumer: %w", err)
-	}
 
-	return &Subscriber{client: client, log: log, handler: handler}, nil
+	return (*Subscriber)(subscriber), nil
 }
 
 // KafkaClientOptions возвращает базовые kgo-опции (TLS/SASL) для собственных
-// Kafka-клиентов сервиса. Без аргументов настройки читаются из окружения так же,
-// как в NewProducer и NewSubscriber, и проверяются по текущему ENV.
+// Kafka-клиентов сервиса.
 func KafkaClientOptions(security ...KafkaSecurity) ([]kgo.Opt, error) {
-	return kafkaSecurityOptions(security...)
+	return kafka.ClientOptions(internalSecurity(security)...)
 }
 
 // Run — цикл потребления; Runnable для Runner'а. Завершается по отмене ctx.
 func (s *Subscriber) Run(ctx context.Context) error {
-	for {
-		fetches := s.client.PollRecords(ctx, 1)
-		if ctx.Err() != nil {
-			s.client.AllowRebalance()
-
-			return nil
-		}
-		if len(fetches.Errors()) > 0 {
-			s.client.AllowRebalance()
-			// Нельзя пропускать записи из частично успешного fetch: остановка даёт redelivery.
-			return fmt.Errorf("kafka poll failed")
-		}
-		err := s.processFetch(ctx, fetches)
-		s.client.AllowRebalance()
-		if ctx.Err() != nil {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-	}
-}
-
-func (s *Subscriber) processFetch(ctx context.Context, fetches kgo.Fetches) error {
-	iter := fetches.RecordIter()
-	for !iter.Done() {
-		rec := iter.Next()
-		// Ограниченный бюджет меньше rebalance timeout; handler обязан соблюдать ctx.
-		recordCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-		err := s.processRecord(recordCtx, rec)
-		cancel()
-		if err != nil {
-			return fmt.Errorf("kafka record failed topic=%s partition=%d offset=%d: %w", rec.Topic, rec.Partition, rec.Offset, err)
-		}
-	}
-
-	return nil
-}
-
-func (s *Subscriber) processRecord(ctx context.Context, rec *kgo.Record) error {
-	ctx = ExtractKafkaTrace(ctx, rec)
-	var span trace.Span
-	if s.tracing != nil {
-		ctx, span = s.tracing.kafkaSpan(ctx, "process", trace.SpanKindConsumer)
-		defer span.End()
-	}
-	handlerCtx := context.WithValue(ctx, positionKey{}, RecordPosition{
-		Topic: rec.Topic, Partition: rec.Partition, Offset: rec.Offset,
-	})
-	if err := s.handleRecord(handlerCtx, rec); err != nil {
-		markKafkaError(span, "handler_failed")
-
-		return err
-	}
-	if err := s.client.CommitRecords(ctx, rec); err != nil {
-		markKafkaError(span, "commit_failed")
-
-		return err
-	}
-
-	return nil
-}
-
-func (s *Subscriber) handleRecord(ctx context.Context, rec *kgo.Record) error {
-	for attempt := 0; attempt < 3; attempt++ {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if err := s.handler(ctx, string(rec.Key), rec.Value); err == nil {
-			return nil
-		}
-		// Не записываем payload, key и произвольный текст ошибки handler в логи.
-		if attempt == 2 {
-			return fmt.Errorf("handler retry budget exhausted")
-		}
-		timer := time.NewTimer(time.Duration(attempt+1) * 100 * time.Millisecond)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-
-			return ctx.Err()
-		case <-timer.C:
-		}
-	}
-
-	return nil
+	return (*kafka.Subscriber)(s).Run(ctx)
 }
 
 // Ping проверяет доступность кластера.
-func (s *Subscriber) Ping(ctx context.Context) error { return s.client.Ping(ctx) }
+func (s *Subscriber) Ping(ctx context.Context) error {
+	return (*kafka.Subscriber)(s).Ping(ctx)
+}
 
 // Close закрывает клиент.
-func (s *Subscriber) Close() { s.client.Close() }
+func (s *Subscriber) Close() {
+	(*kafka.Subscriber)(s).Close()
+}
 
 // NewProducer создаёт producer из broker-ов Options приложения и регистрирует его очистку.
 func (a *App) NewProducer() (*Producer, error) {
-	p, err := NewProducer(a.opts.KafkaBrokers, a.kafkaSecurity())
+	p, err := kafka.NewProducerWithRuntime(a.tracing, a.opts.KafkaBrokers, internalSecurity([]KafkaSecurity{a.kafkaSecurity()})...)
 	if err != nil {
 		return nil, err
 	}
-	p.tracing = a.tracing
-	a.trackCloser(p.Close)
+	producer := (*Producer)(p)
+	a.trackCloser(producer.Close)
 
-	return p, nil
+	return producer, nil
 }
 
 // NewSubscriber создаёт consumer-group подписчика из broker-ов Options и регистрирует очистку.
 func (a *App) NewSubscriber(group string, topics []string, handler Handler) (*Subscriber, error) {
-	s, err := NewSubscriber(a.opts.KafkaBrokers, group, topics, handler, a.log, a.kafkaSecurity())
+	s, err := kafka.NewSubscriberWithRuntime(
+		a.tracing, a.opts.KafkaBrokers, group, topics, kafka.Handler(handler), a.log,
+		internalSecurity([]KafkaSecurity{a.kafkaSecurity()})...,
+	)
 	if err != nil {
 		return nil, err
 	}
-	s.tracing = a.tracing
-	a.trackCloser(s.Close)
+	subscriber := (*Subscriber)(s)
+	a.trackCloser(subscriber.Close)
 
-	return s, nil
+	return subscriber, nil
 }
 
 func (a *App) kafkaSecurity() KafkaSecurity {
@@ -257,4 +117,13 @@ func (a *App) kafkaSecurity() KafkaSecurity {
 	security.Environment = a.opts.Environment
 
 	return security
+}
+
+func internalSecurity(settings []KafkaSecurity) []kafka.Security {
+	converted := make([]kafka.Security, 0, len(settings))
+	for _, setting := range settings {
+		converted = append(converted, kafka.Security(setting))
+	}
+
+	return converted
 }

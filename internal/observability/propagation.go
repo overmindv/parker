@@ -1,4 +1,4 @@
-package parker
+package observability
 
 import (
 	"context"
@@ -8,6 +8,9 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 	"go.opentelemetry.io/otel/propagation"
 )
+
+// TraceparentHeader — W3C заголовок трассировки (traceparent).
+const TraceparentHeader = "traceparent"
 
 type traceHeader struct{ value string }
 
@@ -27,7 +30,7 @@ func (h *traceHeader) Set(key, value string) {
 
 func (*traceHeader) Keys() []string { return []string{TraceparentHeader} }
 
-func extractTraceparent(ctx context.Context, parent string) context.Context {
+func ExtractTraceparent(ctx context.Context, parent string) context.Context {
 	if len(parent) != 55 || !strings.HasPrefix(parent, "00-") {
 		return ctx
 	}
@@ -61,7 +64,7 @@ func ExtractKafkaTrace(ctx context.Context, record *kgo.Record) context.Context 
 		return ctx
 	}
 
-	return extractTraceparent(ctx, string(parent))
+	return ExtractTraceparent(ctx, string(parent))
 }
 
 // InjectKafkaTrace заменяет traceparent записи, если в контексте есть W3C trace.

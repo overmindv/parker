@@ -13,6 +13,10 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/overmindv/parker/internal/cli"
+	"github.com/overmindv/parker/internal/httpkit"
+	"github.com/overmindv/parker/internal/lifecycle"
+	"github.com/overmindv/parker/internal/observability"
 )
 
 // Version — версия parker, печатается командой `version`.
@@ -29,9 +33,9 @@ type App struct {
 	health    *HealthRegistry
 	mux       *http.ServeMux
 	metrics   *Metrics
-	tracing   *traceRuntime
+	tracing   *observability.Runtime
 	server    *http.Server
-	runnables []namedRunnable
+	runnables []lifecycle.NamedRunnable
 
 	pgOnce sync.Once
 	pgPool *pgxpool.Pool
@@ -63,9 +67,9 @@ func MainArgs(run func(*App) error, args []string, opts ...Option) int {
 
 		return 0
 	case "migrate":
-		return runMigrateCLI(args[1:])
+		return cli.Migrate(args[1:])
 	case "init":
-		return runInitCLI(args[1:])
+		return cli.Init(args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "parker: неизвестная команда %q\n", cmd)
 		fmt.Fprintln(os.Stderr, "доступные команды: serve, migrate, init, version")
@@ -104,7 +108,7 @@ func runServe(run func(*App) error, _ []string, opts ...Option) int {
 	if run != nil {
 		if err := run(app); err != nil {
 			if tracing != nil {
-				tracing.shutdown(context.Background())
+				tracing.Shutdown(context.Background())
 			}
 			logger.Error("не удалось инициализировать сервис", "error", err)
 
@@ -117,10 +121,10 @@ func runServe(run func(*App) error, _ []string, opts ...Option) int {
 
 	runner := NewRunner(logger, options.ShutdownTimeout)
 	if tracing != nil {
-		runner.afterShutdown = tracing.shutdown
+		runner.SetAfterShutdown(tracing.Shutdown)
 	}
 	for _, rn := range app.runnables {
-		runner.AddRunnable(rn.name, rn.fn)
+		runner.AddRunnable(rn.Name, Runnable(rn.Fn))
 	}
 
 	logger.Info(options.ServiceName+" запущен",
@@ -172,7 +176,7 @@ func (a *App) LoggerFor(ctx context.Context) *slog.Logger {
 
 // HTTP возвращает роутер для регистрации бизнес-роутов
 // (встроенные /health и /ready уже зарегистрированы).
-func (a *App) HTTP() *HTTPServer { return &HTTPServer{mux: a.mux} }
+func (a *App) HTTP() *HTTPServer { return (*HTTPServer)(httpkit.NewServer(a.mux)) }
 
 // AddHealthCheck регистрирует проверку готовности (агрегируется в /ready).
 func (a *App) AddHealthCheck(name string, check HealthCheck) {
@@ -182,7 +186,7 @@ func (a *App) AddHealthCheck(name string, check HealthCheck) {
 // AddRunnable регистрирует фоновый воркер с graceful shutdown.
 func (a *App) AddRunnable(name string, fn Runnable) {
 	if fn != nil {
-		a.runnables = append(a.runnables, namedRunnable{name: name, fn: fn})
+		a.runnables = append(a.runnables, lifecycle.NamedRunnable{Name: name, Fn: lifecycle.Runnable(fn)})
 	}
 }
 
@@ -205,12 +209,12 @@ func (a *App) initServer() {
 	// recover → request-id → trace → access-log → metrics → mux.
 	handler := http.Handler(a.mux)
 	if a.metrics != nil {
-		handler = a.metrics.middleware(a.opts.ServiceName)(handler)
+		handler = observability.HTTPMiddleware((*observability.Metrics)(a.metrics), a.opts.ServiceName)(handler)
 	}
-	handler = accessLogMiddleware(a.log)(handler)
-	handler = a.tracing.serverMiddleware(handler)
-	handler = requestIDMiddleware(handler)
-	handler = recoverMiddleware(a.log)(handler)
+	handler = httpkit.AccessLogMiddleware(a.log)(handler)
+	handler = a.tracing.ServerMiddleware(handler)
+	handler = httpkit.RequestIDMiddleware(handler)
+	handler = httpkit.RecoverMiddleware(a.log)(handler)
 
 	a.server = &http.Server{
 		Addr:              a.opts.HTTPAddress,
@@ -255,19 +259,6 @@ func (a *App) handleReady(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte("ok"))
-}
-
-// HTTPServer — тонкая обёртка над *http.ServeMux для регистрации бизнес-роутов.
-type HTTPServer struct{ mux *http.ServeMux }
-
-// Handle регистрирует обработчик по паттерну (поддерж: "GET /tasks", "POST /tasks/{id}").
-func (s *HTTPServer) Handle(pattern string, handler http.Handler) {
-	s.mux.Handle(pattern, handler)
-}
-
-// HandleFunc регистрирует функцию-обработчик по паттерну.
-func (s *HTTPServer) HandleFunc(pattern string, handler func(http.ResponseWriter, *http.Request)) {
-	s.mux.HandleFunc(pattern, handler)
 }
 
 // logFatal печатает ошибку в stderr.

@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/overmindv/parker/internal/observability"
+	"github.com/overmindv/parker/internal/requestid"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"go.opentelemetry.io/otel/trace"
 )
@@ -17,7 +19,7 @@ const traceFixture = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
 func TestParseTraceparent_Valid(t *testing.T) {
 	t.Parallel()
 
-	ctx := extractTraceparent(t.Context(), traceFixture)
+	ctx := observability.ExtractTraceparent(t.Context(), traceFixture)
 	if TraceparentFrom(ctx) != traceFixture || !trace.SpanContextFromContext(ctx).IsRemote() {
 		t.Fatal("valid W3C trace did not round-trip")
 	}
@@ -36,7 +38,7 @@ func TestParseTraceparent_Invalid(t *testing.T) {
 		strings.TrimSuffix(traceFixture, "01") + "xx",
 	}
 	for _, raw := range cases {
-		if ctx := extractTraceparent(t.Context(), raw); TraceparentFrom(ctx) != "" {
+		if ctx := observability.ExtractTraceparent(t.Context(), raw); TraceparentFrom(ctx) != "" {
 			t.Fatal("invalid W3C trace was accepted")
 		}
 	}
@@ -45,7 +47,7 @@ func TestParseTraceparent_Invalid(t *testing.T) {
 func TestTraceMiddleware_SetsContext(t *testing.T) {
 	t.Parallel()
 
-	h := (*traceRuntime)(nil).serverMiddleware(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+	h := (*observability.Runtime)(nil).ServerMiddleware(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		if TraceIDFrom(r.Context()) != "4bf92f3577b34da6a3ce929d0e0e4736" || SpanIDFrom(r.Context()) != "00f067aa0ba902b7" {
 			t.Error("middleware did not propagate the parent context")
 		}
@@ -58,7 +60,7 @@ func TestTraceMiddleware_SetsContext(t *testing.T) {
 func TestTraceMiddleware_NoHeaderNoop(t *testing.T) {
 	t.Parallel()
 
-	h := (*traceRuntime)(nil).serverMiddleware(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+	h := (*observability.Runtime)(nil).ServerMiddleware(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		if TraceIDFrom(r.Context()) != "" {
 			t.Error("missing or duplicate traceparent produced a parent")
 		}
@@ -75,7 +77,7 @@ func TestApp_LoggerForAddsTraceFields(t *testing.T) {
 
 	var logs bytes.Buffer
 	app := &App{log: bufferLogger(&logs)}
-	ctx := extractTraceparent(withRequestID(context.Background(), "req-9"), traceFixture)
+	ctx := observability.ExtractTraceparent(requestid.With(context.Background(), "req-9"), traceFixture)
 	app.LoggerFor(ctx).Info("request")
 	for _, field := range []string{"request_id=req-9", "trace_id=4bf92f3577b34da6a3ce929d0e0e4736", "span_id=00f067aa0ba902b7"} {
 		if !strings.Contains(logs.String(), field) {
@@ -88,7 +90,7 @@ func TestKafkaTraceReplacesDuplicateHeaders(t *testing.T) {
 	t.Parallel()
 
 	ctx := t.Context()
-	parent := extractTraceparent(ctx, traceFixture)
+	parent := observability.ExtractTraceparent(ctx, traceFixture)
 	record := &kgo.Record{Headers: []kgo.RecordHeader{
 		{Key: "Traceparent", Value: []byte(traceFixture)},
 		{Key: TraceparentHeader, Value: []byte(traceFixture)},

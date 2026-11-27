@@ -4,12 +4,26 @@
 
 ## Слои и границы
 
-- `parker` (корень пакета) — **стабильный публичный API** для прикладных сервисов:
-  `parker.Main`, `parker.App`, `parker.Options`, `parker.Option`, `parker.Runnable`,
-  `parker.HealthCheck`, `parker.Env/EnvDuration/EnvInt64/EnvList`.
-- `internal/` — неэкспортируемые детали (runner, http-сервер, postgres, kafka, outbox).
+- `parker` (корень пакета) — **стабильный публичный фасад**: типы контракта и
+  тонкие делегирования. Здесь нет реализации. Публичные типы обязаны оставаться
+  в корневом пакете (`architecture_test.go` это проверяет).
+- `internal/<домен>` — реализация по доменам:
+  - `app`-слой пока в корне (`app.go`) — композиция `App`, `Main`, `runServe`;
+  - `cli` — подкоманды `migrate`/`init`;
+  - `servicegen` + `servicegen/template` — генерация каркаса сервиса;
+  - `config`-часть (`options.go`, `config.go`) остаётся в корне как публичный контракт;
+  - `observability` — метрики, трейсинг, OTLP, propagation;
+  - `httpkit` — HTTP-сервер и middleware;
+  - `requestid` — request_id в контексте;
+  - `kafka` — producer/subscriber и TLS/SASL;
+  - `postgres`, `migrate` — пул и goose-миграции;
+  - `outbox` — transactional outbox и retry;
+  - `lifecycle` — Runner и graceful shutdown;
+  - `health`, `env`, `logging` — базовые инфраструктурные пакеты.
 - `cmd/parker` — CLI: dispatch подкоманд `serve`/`migrate`/`init`/`version`.
 - Не расширяй публичный API без нужды; каждое добавление проходится через код-ревью и тестами.
+- Добавляя файл в корень, обнови `rootFacadeFiles` в `architecture_test.go`; новый
+  код по умолчанию идёт в `internal/<домен>`.
 
 ## Жизненный цикл (инвариант)
 

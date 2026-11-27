@@ -192,10 +192,30 @@ immutable tag: workflow получает исходный tag object из origin
 с checkout и зелёным main CI, повторяет все gates. Тег и module contents не меняются.
 Изменение самой библиотеки после tag требует новой версии.
 
+## Структура репозитория (OVM-350)
+
+В корне остаётся публичный фасад: `app.go`, `options.go`, `config.go` и файлы
+делегирования (`kafka.go`, `outbox.go`, `metrics.go`, `tracing.go`, ...). Публичные
+типы (`App`, `Options`, `KafkaSecurity`, `Producer`, `Outbox`, `Metrics`, ...)
+обязаны оставаться в корневом пакете — это проверяет `architecture_test.go`.
+
+Реализация разложена по доменам:
+
+- `internal/observability` — метрики, трейсинг, OTLP, propagation;
+- `internal/httpkit` — HTTP-сервер и middleware;
+- `internal/requestid` — request_id в контексте;
+- `internal/kafka` — producer/subscriber, TLS/SASL;
+- `internal/postgres`, `internal/migrate` — пул и goose-миграции;
+- `internal/outbox` — transactional outbox и retry;
+- `internal/lifecycle` — Runner и graceful shutdown;
+- `internal/servicegen` + `template/` — генерация каркаса сервиса;
+- `internal/cli` — подкоманды `migrate`/`init`;
+- `internal/health`, `internal/env`, `internal/logging` — базовые пакеты.
+
 ## Infrastructure boundaries и release v0.3.0
 
-Реализация инфраструктуры вынесена в `internal/` (`env`, `health`, `logging`),
-публичный фасад корневого пакета сохранён (OVM-300). В production TLS обязателен
+Реализация инфраструктуры вынесена в `internal/`, публичный фасад корневого
+пакета сохранён (OVM-300, расширено в OVM-350). В production TLS обязателен
 только для сервиса, создающего Kafka-клиент: сервис без Kafka (например, users)
 стартует без `KAFKA_TLS_ENABLED`. Для собственных Kafka-клиентов используйте
 `KafkaClientOptions`: он возвращает те же TLS/SASL-опции и проверки, что

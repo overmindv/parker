@@ -17,7 +17,7 @@ import (
 	"testing"
 	"time"
 
-	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"github.com/overmindv/parker/internal/observability"
 	"go.opentelemetry.io/otel/trace"
 	collectorpb "go.opentelemetry.io/proto/otlp/collector/trace/v1"
 	tracepb "go.opentelemetry.io/proto/otlp/trace/v1"
@@ -34,16 +34,16 @@ func newCollectorFixture(t *testing.T) (string, *collectorFixture) {
 	t.Helper()
 	capture := &collectorFixture{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != traceExportPath || r.Method != http.MethodPost ||
+		if r.URL.Path != observability.TraceExportPath || r.Method != http.MethodPost ||
 			r.Header.Get("Content-Type") != "application/x-protobuf" || r.Header.Get(TraceparentHeader) != "" {
 			t.Error("wrong OTLP/HTTP request")
 			w.WriteHeader(http.StatusBadRequest)
 
 			return
 		}
-		body, err := io.ReadAll(io.LimitReader(r.Body, maxOTLPRequest+1))
+		body, err := io.ReadAll(io.LimitReader(r.Body, observability.MaxOTLPRequest+1))
 		var message collectorpb.ExportTraceServiceRequest
-		if err != nil || len(body) > maxOTLPRequest || proto.Unmarshal(body, &message) != nil {
+		if err != nil || len(body) > observability.MaxOTLPRequest || proto.Unmarshal(body, &message) != nil {
 			t.Error("collector received invalid protobuf")
 			w.WriteHeader(http.StatusBadRequest)
 
@@ -82,7 +82,7 @@ func tracedApp(t *testing.T, endpoint, service string, ratio float64) *App {
 	if err != nil || tracing == nil {
 		t.Fatal("cannot create trace provider", err)
 	}
-	t.Cleanup(func() { tracing.shutdown(context.Background()) })
+	t.Cleanup(func() { tracing.Shutdown(context.Background()) })
 	a := &App{opts: opts, log: log, health: NewHealthRegistry(), tracing: tracing}
 	a.initServer()
 
@@ -138,8 +138,8 @@ func TestTraceHTTPExportsLinkedSpansWithoutRequestData(t *testing.T) {
 	if response.Code != http.StatusCreated {
 		t.Fatal("HTTP handling changed while recording spans", response.Code)
 	}
-	a.tracing.shutdown(t.Context())
-	b.tracing.shutdown(t.Context())
+	a.tracing.Shutdown(t.Context())
+	b.tracing.Shutdown(t.Context())
 	spans, wire := collector.snapshot()
 	if len(spans) != 3 || bytes.Contains(wire, []byte(private)) {
 		t.Fatal("HTTP trace missing spans or leaking data", len(spans))
@@ -187,7 +187,7 @@ func TestTraceHTTPDoesNotPropagateAfterRedirect(t *testing.T) {
 	app := &App{}
 	client := &http.Client{Transport: app.TraceHTTPTransport(nil), Timeout: time.Second}
 	t.Cleanup(client.CloseIdleConnections)
-	ctx := extractTraceparent(t.Context(), traceFixture)
+	ctx := observability.ExtractTraceparent(t.Context(), traceFixture)
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, redirect.URL, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -229,7 +229,7 @@ func TestTraceExporterHonorsSampling(t *testing.T) {
 		r := httptest.NewRequest(http.MethodGet, "/work", nil)
 		r.Header.Set(TraceparentHeader, tc.parent)
 		a.server.Handler.ServeHTTP(httptest.NewRecorder(), r)
-		a.tracing.shutdown(t.Context())
+		a.tracing.Shutdown(t.Context())
 	}
 	if spans, _ := collector.snapshot(); len(spans) != 0 {
 		t.Fatal("unsampled spans reached the collector", len(spans))
@@ -247,7 +247,7 @@ func TestOTLPClientRejectsRedirectsAndOversizeReplies(t *testing.T) {
 		case "/redirect":
 			http.Redirect(w, r, target.URL, http.StatusTemporaryRedirect)
 		case "/large":
-			_, _ = io.WriteString(w, strings.Repeat("x", maxOTLPResponse+1))
+			_, _ = io.WriteString(w, strings.Repeat("x", observability.MaxOTLPResponse+1))
 		case "/partial":
 			body, err := proto.Marshal(&collectorpb.ExportTraceServiceResponse{
 				PartialSuccess: &collectorpb.ExportTracePartialSuccess{RejectedSpans: 1, ErrorMessage: "private-collector-data"},
@@ -261,12 +261,12 @@ func TestOTLPClientRejectsRedirectsAndOversizeReplies(t *testing.T) {
 		}
 	}))
 	t.Cleanup(collector.Close)
-	for path, want := range map[string]error{"/redirect": errTraceExport, "/large": errTraceExport, "/partial": errTracePartial} {
+	for path, want := range map[string]error{"/redirect": observability.ErrTraceExport, "/large": observability.ErrTraceExport, "/partial": observability.ErrTracePartial} {
 		endpoint, err := url.Parse(collector.URL + path)
 		if err != nil {
 			t.Fatal(err)
 		}
-		client := newOTLPClient(endpoint)
+		client := observability.NewOTLPClient(endpoint)
 		if err := client.UploadTraces(t.Context(), nil); !errors.Is(err, want) || strings.Contains(err.Error(), "private-collector-data") {
 			t.Fatal("collector failure was not redacted for", path, err)
 		}
@@ -295,11 +295,11 @@ func TestTraceRunnerFlushHonorsShutdownDeadline(t *testing.T) {
 		collector.Close()
 	})
 	a := tracedApp(t, collector.URL, "shutdown-fixture", 1)
-	_, span := a.tracing.tracer.Start(t.Context(), "fixture")
+	_, span := a.tracing.Tracer().Start(t.Context(), "fixture")
 	span.End()
 	const budget = 250 * time.Millisecond
 	r := NewRunner(a.log, budget)
-	r.afterShutdown = a.tracing.shutdown
+	r.SetAfterShutdown(a.tracing.Shutdown)
 	ctx, cancel := context.WithCancel(t.Context())
 	r.AddRunnable("cancel", func(context.Context) error {
 		cancel()
@@ -340,33 +340,7 @@ func TestTracingConfigRejectsSensitiveOrInsecureEndpoints(t *testing.T) {
 		t.Fatal("non-finite sampling ratio accepted")
 	}
 	valid, err := (TraceOptions{Endpoint: "https://collector.invalid", SampleRatio: 0.1}).collectorEndpoint("production", "test")
-	if err != nil || valid.Path != traceExportPath {
+	if err != nil || valid.Path != observability.TraceExportPath {
 		t.Fatal("secure endpoint rejected or missing default path", err)
-	}
-}
-
-func BenchmarkTraceHTTPRecording(b *testing.B) {
-	for _, sampled := range []bool{false, true} {
-		name := "unsampled"
-		sampler := sdktrace.NeverSample()
-		if sampled {
-			name = "sampled"
-			sampler = sdktrace.AlwaysSample()
-		}
-		b.Run(name, func(b *testing.B) {
-			provider := sdktrace.NewTracerProvider(sdktrace.WithSampler(sampler))
-			b.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
-			tracing := &traceRuntime{tracer: provider.Tracer("benchmark")}
-			mux := http.NewServeMux()
-			mux.HandleFunc("GET /work/{id}", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
-			h := tracing.serverMiddleware(mux)
-			r := httptest.NewRequest(http.MethodGet, "/work/example", nil)
-			r.Header.Set(TraceparentHeader, traceFixture)
-			w := make(benchWriter)
-			b.ReportAllocs()
-			for b.Loop() {
-				h.ServeHTTP(w, r)
-			}
-		})
 	}
 }

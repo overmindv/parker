@@ -1,4 +1,4 @@
-package parker
+package outbox
 
 import (
 	"context"
@@ -10,12 +10,12 @@ import (
 )
 
 type fakeOutbox struct {
-	pending []OutboxRecord
+	pending []Record
 	sent    []string
 	limit   int
 }
 
-func (f *fakeOutbox) FetchPending(_ context.Context, limit int) ([]OutboxRecord, error) {
+func (f *fakeOutbox) FetchPending(_ context.Context, limit int) ([]Record, error) {
 	f.limit = limit
 
 	return f.pending, nil
@@ -41,20 +41,16 @@ func (f *fakePublisher) Publish(_ context.Context, topic, key string, _ []byte) 
 	return nil
 }
 
-func discardLog() *slog.Logger {
-	return slog.New(slog.NewTextHandler(io.Discard, nil))
-}
-
 func TestOutboxDispatcher_FlushPublishesAndMarks(t *testing.T) {
 	t.Parallel()
 
-	outbox := &fakeOutbox{pending: []OutboxRecord{
+	outbox := &fakeOutbox{pending: []Record{
 		{ID: "1", Topic: "t", Key: "k1"},
 		{ID: "2", Topic: "t", Key: "k2"},
 	}}
 	pub := &fakePublisher{}
 
-	d := newOutboxDispatcher(outbox, pub, 0, 100, discardLog())
+	d := NewDispatcherWithPublisher(outbox, pub, 0, 100, discardLog())
 	d.flushOnce(context.Background())
 
 	if len(pub.published) != 2 {
@@ -68,13 +64,13 @@ func TestOutboxDispatcher_FlushPublishesAndMarks(t *testing.T) {
 func TestOutboxDispatcher_PublishFailureNotMarked(t *testing.T) {
 	t.Parallel()
 
-	outbox := &fakeOutbox{pending: []OutboxRecord{
+	outbox := &fakeOutbox{pending: []Record{
 		{ID: "1", Topic: "bad", Key: "k1"},
 		{ID: "2", Topic: "good", Key: "k2"},
 	}}
 	pub := &fakePublisher{failTopic: "bad"}
 
-	d := newOutboxDispatcher(outbox, pub, 0, 100, discardLog())
+	d := NewDispatcherWithPublisher(outbox, pub, 0, 100, discardLog())
 	d.flushOnce(context.Background())
 
 	// Только успешная запись отправлена и помечена.
@@ -91,7 +87,7 @@ func TestOutboxDispatcher_EmptyNoOp(t *testing.T) {
 
 	outbox := &fakeOutbox{}
 	pub := &fakePublisher{}
-	d := newOutboxDispatcher(outbox, pub, 0, 100, discardLog())
+	d := NewDispatcherWithPublisher(outbox, pub, 0, 100, discardLog())
 	d.flushOnce(context.Background())
 	if len(pub.published) != 0 || len(outbox.sent) != 0 {
 		t.Fatal("при пустой очереди не должно быть публикаций")
@@ -117,10 +113,14 @@ func TestOutboxSlowRecordDoesNotConsumeBatchLease(t *testing.T) {
 	t.Parallel()
 
 	deadline := time.Now().Add(200 * time.Millisecond)
-	outbox := &fakeOutbox{pending: []OutboxRecord{{ID: "1", Topic: "slow", LeaseUntil: deadline}, {ID: "2", Topic: "healthy", LeaseUntil: deadline}}}
+	outbox := &fakeOutbox{pending: []Record{{ID: "1", Topic: "slow", LeaseUntil: deadline}, {ID: "2", Topic: "healthy", LeaseUntil: deadline}}}
 	pub := &budgetPublisher{}
-	newOutboxDispatcher(outbox, pub, 0, 100, discardLog()).flushOnce(context.Background())
+	NewDispatcherWithPublisher(outbox, pub, 0, 100, discardLog()).flushOnce(context.Background())
 	if !pub.healthy {
 		t.Fatal("slow record starved healthy event")
 	}
+}
+
+func discardLog() *slog.Logger {
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }

@@ -1,0 +1,153 @@
+package observability
+
+import (
+	"net/http"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+)
+
+const (
+	labelService = "service"
+	labelMethod  = "method"
+	labelRoute   = "route"
+	labelStatus  = "status"
+)
+
+// Metrics — агрегатор HTTP-метрик сервиса (RPS, latency, error-rate),
+// публикуемых на GET /metrics в формате Prometheus.
+type Metrics struct {
+	Enabled         bool
+	registry        *prometheus.Registry
+	requestsTotal   *prometheus.CounterVec
+	requestDuration *prometheus.HistogramVec
+	readyGauge      *prometheus.GaugeVec
+	outboxAge       prometheus.Gauge
+}
+
+// NewMetrics регистрирует метрики запросов в отдельном prometheus-регистре.
+func NewMetrics(enabled bool) *Metrics {
+	registry := prometheus.NewRegistry()
+
+	requestsTotal := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "parker_http_requests_total",
+		Help: "Всего HTTP-запросов по service/method/route/status.",
+	}, []string{labelService, labelMethod, labelRoute, labelStatus})
+
+	requestDuration := prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "parker_http_request_duration_seconds",
+		Help:    "Длительность HTTP-запросов (гистограмма) по service/method/route.",
+		Buckets: prometheus.DefBuckets, // 12 buckets по умолчанию
+	}, []string{labelService, labelMethod, labelRoute})
+
+	// Gauge-статус /ready (1 — готов, 0 — нет) для алерта ServiceDown.
+	readyGauge := prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "parker_ready",
+		Help: "Готовность сервиса (1 — /ready ok, 0 — нет) по service.",
+	}, []string{labelService})
+
+	outboxAge := prometheus.NewGauge(prometheus.GaugeOpts{Name: "parker_outbox_oldest_age_seconds", Help: "Возраст старейшего неотправленного события."})
+	registry.MustRegister(requestsTotal, requestDuration, readyGauge, outboxAge)
+
+	return &Metrics{
+		Enabled:         enabled,
+		registry:        registry,
+		requestsTotal:   requestsTotal,
+		requestDuration: requestDuration,
+		readyGauge:      readyGauge,
+		outboxAge:       outboxAge,
+	}
+}
+
+// SetReady обновляет gauge готовности для сервиса.
+func (m *Metrics) SetReady(service string, ready bool) {
+	v := 0.0
+	if ready {
+		v = 1
+	}
+	m.readyGauge.WithLabelValues(service).Set(v)
+}
+
+// Register добавляет метрику сервиса в его реестр /metrics.
+func (m *Metrics) Register(collector prometheus.Collector) error {
+	return m.registry.Register(collector)
+}
+
+// observe записывает метрику одного запроса.
+func (m *Metrics) observe(service, method, route string, status int, dur time.Duration) {
+	m.requestsTotal.WithLabelValues(service, method, route, strconv.Itoa(status)).Inc()
+	m.requestDuration.WithLabelValues(service, method, route).Observe(dur.Seconds())
+}
+
+// Handler возвращает HTTP-обработчик для GET /metrics.
+func (m *Metrics) Handler() http.Handler {
+	return promhttp.HandlerFor(m.registry, promhttp.HandlerOpts{})
+}
+
+// HTTPMiddleware замеряет метод/путь/статус/длительность каждого запроса.
+func HTTPMiddleware(m *Metrics, service string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			start := time.Now()
+			rec := NewStatusRecorder(w)
+			next.ServeHTTP(rec, r)
+			m.observe(service, r.Method, normalizeRoute(r.URL.Path), rec.Status(), time.Since(start))
+		})
+	}
+}
+
+// SetOutboxAge обновляет возраст старейшего неотправленного события.
+func SetOutboxAge(m *Metrics, seconds float64) {
+	if m != nil {
+		m.outboxAge.Set(seconds)
+	}
+}
+
+// normalizeRoute приводит путь к низкокардинальному виду: сегменты-идентификаторы
+// (целые числа и UUID) заменяются на {id}, чтобы не плодить серии по конкретным id.
+func normalizeRoute(path string) string {
+	parts := strings.Split(path, "/")
+	changed := false
+	for i, p := range parts {
+		if looksLikeID(p) {
+			parts[i] = "{id}"
+			changed = true
+		}
+	}
+	if !changed {
+		return path
+	}
+
+	return strings.Join(parts, "/")
+}
+
+func looksLikeID(p string) bool {
+	if p == "" {
+		return false
+	}
+	if _, err := strconv.ParseInt(p, 10, 64); err == nil {
+		return true
+	}
+	// UUID-подобный сегмент: 8-4-4-4-12 hex.
+	if len(p) != 36 {
+		return false
+	}
+	for i, r := range p {
+		if i == 8 || i == 13 || i == 18 || i == 23 {
+			if r != '-' {
+				return false
+			}
+
+			continue
+		}
+		hexDigit := (r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F')
+		if !hexDigit {
+			return false
+		}
+	}
+
+	return true
+}

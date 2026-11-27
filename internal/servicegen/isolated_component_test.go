@@ -1,6 +1,6 @@
 //go:build component
 
-package parker
+package servicegen
 
 import (
 	"context"

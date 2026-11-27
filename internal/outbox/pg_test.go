@@ -1,11 +1,14 @@
 //go:build component
 
-package parker
+package outbox
 
 import (
 	"context"
+	"os"
 	"testing"
 	"time"
+
+	"github.com/overmindv/parker/internal/postgres"
 )
 
 func TestPgOutbox_FetchAndMark(t *testing.T) {
@@ -13,13 +16,13 @@ func TestPgOutbox_FetchAndMark(t *testing.T) {
 	dsn := testDSN(t)
 	ctx := context.Background()
 
-	pool, err := OpenPool(ctx, dsn)
+	pool, err := postgres.OpenPool(ctx, dsn)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer pool.Close()
 
-	if _, err := pool.Exec(ctx, OutboxSchema); err != nil {
+	if _, err := pool.Exec(ctx, Schema); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := pool.Exec(ctx, `DELETE FROM outbox`); err != nil {
@@ -59,12 +62,12 @@ func TestPgOutbox_FetchAndMark(t *testing.T) {
 func TestPgOutboxExclusiveLeaseAndStaleAck(t *testing.T) {
 
 	ctx := context.Background()
-	pool, err := OpenPool(ctx, testDSN(t))
+	pool, err := postgres.OpenPool(ctx, testDSN(t))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	if _, err = pool.Exec(ctx, OutboxSchema); err != nil {
+	if _, err = pool.Exec(ctx, Schema); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = pool.Exec(ctx, `DELETE FROM outbox; INSERT INTO outbox(topic,message_key,message_value) VALUES('t','k','v')`); err != nil {
@@ -72,7 +75,7 @@ func TestPgOutboxExclusiveLeaseAndStaleAck(t *testing.T) {
 	}
 	first := NewPgOutbox(pool)
 	second := NewPgOutbox(pool)
-	results := make(chan []OutboxRecord, 2)
+	results := make(chan []Record, 2)
 	errs := make(chan error, 2)
 	for _, o := range []*PgOutbox{first, second} {
 		go func(o *PgOutbox) { r, e := o.FetchPending(ctx, 1); results <- r; errs <- e }(o)
@@ -110,12 +113,12 @@ func TestPgOutboxExclusiveLeaseAndStaleAck(t *testing.T) {
 func TestPgOutboxRetryExhaustionReplayAndRetention(t *testing.T) {
 
 	ctx := context.Background()
-	pool, err := OpenPool(ctx, testDSN(t))
+	pool, err := postgres.OpenPool(ctx, testDSN(t))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	if _, err = pool.Exec(ctx, OutboxSchema); err != nil {
+	if _, err = pool.Exec(ctx, Schema); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = pool.Exec(ctx, `DELETE FROM outbox; INSERT INTO outbox(topic,message_key,message_value,created_at) VALUES('t','k','secret-payload',now()-interval '1 hour')`); err != nil {
@@ -123,7 +126,7 @@ func TestPgOutboxRetryExhaustionReplayAndRetention(t *testing.T) {
 	}
 	o := NewPgOutbox(pool)
 	var id string
-	for attempt := 1; attempt <= outboxMaxAttempts; attempt++ {
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		rows, err := o.FetchPending(ctx, 1)
 		if err != nil || len(rows) != 1 {
 			t.Fatalf("claim %d: %v %v", attempt, rows, err)
@@ -148,7 +151,7 @@ func TestPgOutboxRetryExhaustionReplayAndRetention(t *testing.T) {
 		if count != attempt || !next.After(time.Now()) {
 			t.Fatalf("schedule %d %s", count, next)
 		}
-		if attempt == outboxMaxAttempts && status != "exhausted" {
+		if attempt == maxAttempts && status != "exhausted" {
 			t.Fatal("not exhausted")
 		}
 		if _, err = pool.Exec(ctx, `UPDATE outbox SET next_attempt_at=now()-interval '1 second' WHERE id=$1`, id); err != nil {
@@ -187,4 +190,14 @@ func TestPgOutboxRetryExhaustionReplayAndRetention(t *testing.T) {
 	if err != nil || n != 1 {
 		t.Fatalf("cleanup %d %v", n, err)
 	}
+}
+
+func testDSN(t *testing.T) string {
+	t.Helper()
+	dsn := os.Getenv("PARKER_TEST_DSN")
+	if dsn == "" {
+		t.Skip("PARKER_TEST_DSN не задан; пропускаю component-тест")
+	}
+
+	return dsn
 }

@@ -1,4 +1,4 @@
-package parker
+package kafka
 
 import (
 	"context"
@@ -112,4 +112,8 @@ func TestSubscriberBlocksRebalanceWhileProcessing(t *testing.T) {
 	if s.client.(*kgo.Client).OptValue(kgo.BlockRebalanceOnPoll) != true {
 		t.Fatal("rebalance must be blocked during processing")
 	}
+}
+
+func discardLog() *slog.Logger {
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }

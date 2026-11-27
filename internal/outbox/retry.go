@@ -1,4 +1,4 @@
-package parker
+package outbox
 
 import (
 	"context"
@@ -7,9 +7,9 @@ import (
 	"time"
 )
 
-const outboxMaxAttempts = 8
+const maxAttempts = 8
 
-func outboxRetryAt(now time.Time, attempt int, jitter float64) time.Time {
+func retryAt(now time.Time, attempt int, jitter float64) time.Time {
 	if attempt < 1 {
 		attempt = 1
 	}
@@ -31,12 +31,12 @@ func outboxRetryAt(now time.Time, attempt int, jitter float64) time.Time {
 }
 
 // MarkClaimFailed сохраняет расписание, не сохраняя raw broker errors или payload.
-func (o *PgOutbox) MarkClaimFailed(ctx context.Context, rec OutboxRecord) error {
-	next := outboxRetryAt(o.now(), rec.Attempts+1, rand.Float64()) //nolint:gosec // jitter не используется для криптографии
+func (o *PgOutbox) MarkClaimFailed(ctx context.Context, rec Record) error {
+	next := retryAt(o.now(), rec.Attempts+1, rand.Float64()) //nolint:gosec // jitter не используется для криптографии
 	tag, err := o.pool.Exec(ctx, `UPDATE outbox SET attempts=attempts+1,
  status=CASE WHEN attempts+1 >= $3 THEN 'exhausted' ELSE 'pending' END,
  next_attempt_at=$4,claim_token=NULL,lease_until=NULL
- WHERE id=$1 AND claim_token=$2 AND status='publishing' AND lease_until>now()`, rec.ID, rec.ClaimToken, outboxMaxAttempts, next)
+ WHERE id=$1 AND claim_token=$2 AND status='publishing' AND lease_until>now()`, rec.ID, rec.ClaimToken, maxAttempts, next)
 	if err != nil {
 		return fmt.Errorf("outbox reschedule: %w", err)
 	}
@@ -88,13 +88,3 @@ func (o *PgOutbox) CleanupSent(ctx context.Context, retention time.Duration, lim
 
 	return tag.RowsAffected(), err
 }
-
-// OutboxRetryMigration применяется новой append-only миграцией владельца.
-const OutboxRetryMigration = `ALTER TABLE outbox ADD COLUMN IF NOT EXISTS replay_generation INT NOT NULL DEFAULT 0;
-CREATE TABLE IF NOT EXISTS outbox_replay_audit (
- outbox_id UUID NOT NULL, generation INT NOT NULL, actor_id UUID NOT NULL,
- created_at TIMESTAMPTZ NOT NULL DEFAULT now(), PRIMARY KEY(outbox_id,generation)
-);
-CREATE INDEX IF NOT EXISTS outbox_sent_retention_idx ON outbox(sent_at,id) WHERE status='sent';
-CREATE INDEX IF NOT EXISTS outbox_unsent_age_idx ON outbox(created_at) WHERE status<>'sent';
-`

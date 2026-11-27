@@ -3,26 +3,16 @@ package parker
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/overmindv/parker/internal/postgres"
 )
 
 // OpenPool создаёт пул подключений pgxpool и проверяет доступность базы Ping'ом.
 func OpenPool(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
-	pool, err := pgxpool.New(ctx, dsn)
-	if err != nil {
-		return nil, fmt.Errorf("создать pgxpool: %w", err)
-	}
-	if err := pool.Ping(ctx); err != nil {
-		pool.Close()
-
-		return nil, fmt.Errorf("ping postgres: %w", err)
-	}
-
-	return pool, nil
+	return postgres.OpenPool(ctx, dsn)
 }
 
 // Postgres возвращает (открывая по запросу) пул pgxpool к DATABASE_URL сервиса.
@@ -37,7 +27,7 @@ func (a *App) Postgres() (*pgxpool.Pool, error) {
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		pool, err := OpenPool(ctx, a.opts.DatabaseURL)
+		pool, err := postgres.OpenPool(ctx, a.opts.DatabaseURL)
 		if err != nil {
 			a.pgErr = err
 

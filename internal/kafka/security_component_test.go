@@ -1,6 +1,6 @@
 //go:build component
 
-package parker
+package kafka
 
 import (
 	"context"
@@ -17,7 +17,7 @@ func TestAuthenticatedKafka(t *testing.T) {
 	if broker == "" {
 		t.Skip("secure Kafka fixture required")
 	}
-	security := KafkaSecurity{Environment: "production", TLS: true, CAFile: os.Getenv("PARKER_SECURE_CA"), SASLMechanism: "SCRAM-SHA-256", Username: "client", Password: os.Getenv("PARKER_SECURE_PASSWORD")}
+	security := Security{Environment: "production", TLS: true, CAFile: os.Getenv("PARKER_SECURE_CA"), SASLMechanism: "SCRAM-SHA-256", Username: "client", Password: os.Getenv("PARKER_SECURE_PASSWORD")}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	p, err := NewProducer([]string{broker}, security)

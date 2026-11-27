@@ -1,6 +1,6 @@
 //go:build component
 
-package parker
+package servicegen
 
 import (
 	"os"
@@ -19,11 +19,11 @@ func TestGenerateService_Builds(t *testing.T) {
 	temp := t.TempDir()
 
 	// Создаём layout, где ../parker указывает на реальный parker этого репозитория.
-	repoRoot, err := os.Getwd()
+	wd, err := os.Getwd()
 	if err != nil {
 		t.Fatal(err)
 	}
-	parkerDir, err := filepath.Abs(repoRoot)
+	parkerDir, err := filepath.Abs(filepath.Join(wd, "..", ".."))
 	if err != nil {
 		t.Fatal(err)
 	}

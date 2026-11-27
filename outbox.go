@@ -2,23 +2,17 @@ package parker
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/overmindv/parker/internal/kafka"
+	"github.com/overmindv/parker/internal/observability"
+	"github.com/overmindv/parker/internal/outbox"
 )
 
 // OutboxRecord — запись, ожидающая публикации в Kafka.
-type OutboxRecord struct {
-	ID         string
-	Topic      string
-	Key        string
-	Value      []byte
-	ClaimToken string
-	LeaseUntil time.Time
-	Attempts   int
-}
+type OutboxRecord outbox.Record
 
 // Outbox — хранилище исходящих событий. Реализуется поверх БД сервиса,
 // чтобы публиковать событие атомарно с бизнес-данными (в той же транзакции).
@@ -30,236 +24,136 @@ type Outbox interface {
 }
 
 // OutboxSchema — DDL таблицы outbox по умолчанию. Сервис накатывает её своей миграцией.
-const OutboxSchema = `
-CREATE TABLE IF NOT EXISTS outbox (
-    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    topic           TEXT NOT NULL,
-    message_key     TEXT NOT NULL,
-    message_value   BYTEA NOT NULL,
-    status          TEXT NOT NULL DEFAULT 'pending',
-    attempts        INT  NOT NULL DEFAULT 0,
-    next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
-    sent_at         TIMESTAMPTZ,
- claim_token UUID,
- lease_until TIMESTAMPTZ,
- replay_generation INT NOT NULL DEFAULT 0
-);
-CREATE INDEX IF NOT EXISTS outbox_status_idx ON outbox(status, next_attempt_at);
-` + OutboxRetryMigration
+const OutboxSchema = outbox.Schema
 
 // OutboxLeaseMigration — append-only миграция владельца перед обновлением worker.
-const OutboxLeaseMigration = `ALTER TABLE outbox ADD COLUMN IF NOT EXISTS claim_token UUID;
-ALTER TABLE outbox ADD COLUMN IF NOT EXISTS lease_until TIMESTAMPTZ;
-CREATE INDEX IF NOT EXISTS outbox_lease_idx ON outbox(status,lease_until);`
+const OutboxLeaseMigration = outbox.LeaseMigration
 
-// claimedOutbox добавляет CAS, не меняя существующие реализации Outbox сервисов.
-type claimedOutbox interface {
-	MarkClaimSent(context.Context, OutboxRecord) error
-}
+// OutboxRetryMigration применяется новой append-only миграцией владельца.
+const OutboxRetryMigration = outbox.RetryMigration
 
-// publisher — публикация записи в Kafka (реализуется *Producer). Выделен
-// интерфейсом, чтобы диспетчер было легко юнит-тестировать без реального кластера.
-type publisher interface {
-	Publish(ctx context.Context, topic, key string, value []byte) error
-}
-
-// OutboxDispatcher — фоновый воркер: периодически вычитывает pending-записи,
-// публикует их в Kafka и помечает отправленными. При ошибке публикации запись
-// остаётся pending (передоставится на следующем тике — бэкофф по next_attempt_at).
-type OutboxDispatcher struct {
-	outbox   Outbox
-	producer publisher
-	poll     time.Duration
-	batch    int
-	log      *slog.Logger
-	metrics  *Metrics
-}
+// OutboxDispatcher — фоновый воркер публикации outbox-событий.
+type OutboxDispatcher outbox.Dispatcher
 
 // NewOutboxDispatcher создаёт диспетчер.
-func NewOutboxDispatcher(outbox Outbox, producer *Producer, poll time.Duration, log *slog.Logger, metrics ...*Metrics) *OutboxDispatcher {
-	if poll <= 0 {
-		poll = 500 * time.Millisecond
-	}
-	d := newOutboxDispatcher(outbox, producer, poll, 100, log)
+func NewOutboxDispatcher(store Outbox, producer *Producer, poll time.Duration, log *slog.Logger, metrics ...*Metrics) *OutboxDispatcher {
+	var internalMetrics []*observability.Metrics
 	if len(metrics) > 0 {
-		d.metrics = metrics[0]
+		internalMetrics = []*observability.Metrics{(*observability.Metrics)(metrics[0])}
 	}
+	dispatcher := outbox.NewDispatcher(adaptOutbox(store), (*kafka.Producer)(producer), poll, log, internalMetrics...)
 
-	return d
-}
-
-// newOutboxDispatcher — внутренний конструктор с инъекцией publish-интерфейса для тестов.
-func newOutboxDispatcher(outbox Outbox, producer publisher, poll time.Duration, batch int, log *slog.Logger) *OutboxDispatcher {
-	if poll <= 0 {
-		poll = 500 * time.Millisecond
-	}
-	if batch <= 0 || batch > 100 {
-		batch = 100
-	}
-
-	return &OutboxDispatcher{
-		outbox:   outbox,
-		producer: producer,
-		poll:     poll,
-		batch:    batch,
-		log:      log,
-	}
+	return (*OutboxDispatcher)(dispatcher)
 }
 
 // Run — цикл диспетчера; Runnable для Runner'а.
 func (d *OutboxDispatcher) Run(ctx context.Context) error {
-	ticker := time.NewTicker(d.poll)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return nil
-		case <-ticker.C:
-			d.flushOnce(ctx)
-		}
-	}
-}
-
-func (d *OutboxDispatcher) flushOnce(ctx context.Context) {
-	if store, ok := d.outbox.(interface {
-		QueueAge(context.Context) (time.Duration, error)
-		CleanupSent(context.Context, time.Duration, int) (int64, error)
-	}); ok {
-		if d.metrics != nil {
-			age, err := store.QueueAge(ctx)
-			if err == nil {
-				d.metrics.outboxAge.Set(age.Seconds())
-			}
-		}
-		if _, err := store.CleanupSent(ctx, 7*24*time.Hour, 100); err != nil {
-			d.log.Warn("outbox retention failed")
-		}
-	}
-	records, err := d.outbox.FetchPending(ctx, d.batch)
-	if err != nil {
-		d.log.Warn("outbox: не удалось получить записи", "error", err)
-
-		return
-	}
-	if len(records) == 0 {
-		return
-	}
-
-	sentIDs := make([]string, 0, len(records))
-	for index, rec := range records {
-		publishCtx := ctx
-		cancel := func() {}
-		if !rec.LeaseUntil.IsZero() {
-			// Делим остаток lease между оставшимися записями: один сбой не съедает batch.
-			budget := time.Until(rec.LeaseUntil) / time.Duration(len(records)-index+1)
-			if budget > 5*time.Second {
-				budget = 5 * time.Second
-			}
-			publishCtx, cancel = context.WithTimeout(ctx, budget)
-		}
-		err := publishCtx.Err()
-		if err == nil {
-			err = d.producer.Publish(publishCtx, rec.Topic, rec.Key, rec.Value)
-		}
-		cancel()
-		if err != nil {
-			d.log.Error("outbox: не удалось опубликовать",
-				"id", rec.ID, "topic", rec.Topic)
-			if retry, ok := d.outbox.(interface {
-				MarkClaimFailed(context.Context, OutboxRecord) error
-			}); ok {
-				if err := retry.MarkClaimFailed(ctx, rec); err != nil {
-					d.log.Warn("outbox reschedule failed", "id", rec.ID)
-				}
-			}
-
-			continue
-		}
-		if leased, ok := d.outbox.(claimedOutbox); ok {
-			if err := leased.MarkClaimSent(ctx, rec); err != nil {
-				d.log.Warn("outbox claim acknowledgement failed", "id", rec.ID)
-			}
-		} else {
-			sentIDs = append(sentIDs, rec.ID)
-		}
-	}
-	if len(sentIDs) > 0 {
-		if err := d.outbox.MarkSent(ctx, sentIDs); err != nil {
-			d.log.Error("outbox: не удалось пометить отправленными", "error", err)
-		}
-	}
+	return (*outbox.Dispatcher)(d).Run(ctx)
 }
 
 // PgOutbox — реализация Outbox поверх pgxpool (таблица outbox, см. OutboxSchema).
-type PgOutbox struct {
-	pool *pgxpool.Pool
-	now  func() time.Time
-}
+type PgOutbox outbox.PgOutbox
 
 // NewPgOutbox создаёт postgres-outbox.
 func NewPgOutbox(pool *pgxpool.Pool) *PgOutbox {
-	return &PgOutbox{pool: pool, now: time.Now}
+	return (*PgOutbox)(outbox.NewPgOutbox(pool))
 }
 
 // FetchPending закрепляет строки одним коротким statement; publish не держит транзакцию.
 func (o *PgOutbox) FetchPending(ctx context.Context, limit int) ([]OutboxRecord, error) {
-	if limit <= 0 {
-		return nil, nil
-	}
-	if limit > 100 {
-		limit = 100
-	}
-	rows, err := o.pool.Query(ctx, `WITH ready AS (
- SELECT id FROM outbox WHERE (status='pending' AND next_attempt_at<=now())
- OR (status='publishing' AND lease_until<=now()) ORDER BY created_at,id LIMIT $1 FOR UPDATE SKIP LOCKED
- ) UPDATE outbox o SET status='publishing',claim_token=gen_random_uuid(),lease_until=now()+interval '30 seconds'
- FROM ready WHERE o.id=ready.id RETURNING o.id,o.topic,o.message_key,o.message_value,o.claim_token,o.lease_until,o.attempts`, limit)
+	records, err := (*outbox.PgOutbox)(o).FetchPending(ctx, limit)
 	if err != nil {
-		return nil, fmt.Errorf("outbox claim: %w", err)
+		return nil, err
 	}
-	defer rows.Close()
-	var records []OutboxRecord
-	for rows.Next() {
-		var rec OutboxRecord
-		if err := rows.Scan(&rec.ID, &rec.Topic, &rec.Key, &rec.Value, &rec.ClaimToken, &rec.LeaseUntil, &rec.Attempts); err != nil {
-			return nil, err
-		}
-		records = append(records, rec)
+	converted := make([]OutboxRecord, 0, len(records))
+	for _, record := range records {
+		converted = append(converted, OutboxRecord(record))
 	}
 
-	return records, rows.Err()
+	return converted, nil
 }
 
 // MarkClaimSent не позволяет старому worker подтвердить новую lease.
 func (o *PgOutbox) MarkClaimSent(ctx context.Context, rec OutboxRecord) error {
-	tag, err := o.pool.Exec(ctx, `UPDATE outbox SET status='sent',sent_at=now(),claim_token=NULL,lease_until=NULL,attempts=attempts+1
- WHERE id=$1 AND claim_token=$2 AND status='publishing' AND lease_until>now()`, rec.ID, rec.ClaimToken)
-	if err != nil {
-		return fmt.Errorf("outbox mark claim: %w", err)
-	}
-	if tag.RowsAffected() != 1 {
-		return fmt.Errorf("outbox claim lost")
-	}
-
-	return nil
+	return (*outbox.PgOutbox)(o).MarkClaimSent(ctx, outbox.Record(rec))
 }
 
 // MarkSent помечает записи отправленными.
 func (o *PgOutbox) MarkSent(ctx context.Context, ids []string) error {
-	if len(ids) == 0 {
-		return nil
-	}
-	tag, err := o.pool.Exec(ctx, `
-		UPDATE outbox
-		SET status = 'sent', sent_at = now(), attempts = attempts + 1
-		WHERE id = ANY($1) AND status='pending' AND claim_token IS NULL`, ids)
+	return (*outbox.PgOutbox)(o).MarkSent(ctx, ids)
+}
+
+// MarkClaimFailed сохраняет расписание, не сохраняя raw broker errors или payload.
+func (o *PgOutbox) MarkClaimFailed(ctx context.Context, rec OutboxRecord) error {
+	return (*outbox.PgOutbox)(o).MarkClaimFailed(ctx, outbox.Record(rec))
+}
+
+// ReplayExhausted вызывается владельцем после проверки доверенного admin actor.
+func (o *PgOutbox) ReplayExhausted(ctx context.Context, id string, generation int, actor string, admin bool) error {
+	return (*outbox.PgOutbox)(o).ReplayExhausted(ctx, id, generation, actor, admin)
+}
+
+// QueueAge — возраст старейшего неотправленного события, включая exhausted.
+func (o *PgOutbox) QueueAge(ctx context.Context) (time.Duration, error) {
+	return (*outbox.PgOutbox)(o).QueueAge(ctx)
+}
+
+// CleanupSent удаляет только старые sent небольшим batch, не трогая pending/exhausted.
+func (o *PgOutbox) CleanupSent(ctx context.Context, retention time.Duration, limit int) (int64, error) {
+	return (*outbox.PgOutbox)(o).CleanupSent(ctx, retention, limit)
+}
+
+// fullOutbox — возможности PgOutbox, которые диспетчер использует через type assertion.
+type fullOutbox interface {
+	MarkClaimSent(context.Context, OutboxRecord) error
+	MarkClaimFailed(context.Context, OutboxRecord) error
+	QueueAge(context.Context) (time.Duration, error)
+	CleanupSent(context.Context, time.Duration, int) (int64, error)
+}
+
+type outboxAdapter struct{ store Outbox }
+
+func (a outboxAdapter) FetchPending(ctx context.Context, limit int) ([]outbox.Record, error) {
+	records, err := a.store.FetchPending(ctx, limit)
 	if err != nil {
-		return fmt.Errorf("outbox mark sent: %w", err)
+		return nil, err
 	}
-	if tag.RowsAffected() != int64(len(ids)) {
-		return fmt.Errorf("outbox requires claim acknowledgement")
+	converted := make([]outbox.Record, 0, len(records))
+	for _, record := range records {
+		converted = append(converted, outbox.Record(record))
 	}
 
-	return nil
+	return converted, nil
+}
+
+func (a outboxAdapter) MarkSent(ctx context.Context, ids []string) error {
+	return a.store.MarkSent(ctx, ids)
+}
+
+type fullOutboxAdapter struct{ outboxAdapter }
+
+func (a fullOutboxAdapter) MarkClaimSent(ctx context.Context, rec outbox.Record) error {
+	return a.store.(fullOutbox).MarkClaimSent(ctx, OutboxRecord(rec))
+}
+
+func (a fullOutboxAdapter) MarkClaimFailed(ctx context.Context, rec outbox.Record) error {
+	return a.store.(fullOutbox).MarkClaimFailed(ctx, OutboxRecord(rec))
+}
+
+func (a fullOutboxAdapter) QueueAge(ctx context.Context) (time.Duration, error) {
+	return a.store.(fullOutbox).QueueAge(ctx)
+}
+
+func (a fullOutboxAdapter) CleanupSent(ctx context.Context, retention time.Duration, limit int) (int64, error) {
+	return a.store.(fullOutbox).CleanupSent(ctx, retention, limit)
+}
+
+// adaptOutbox сохраняет опциональные возможности PgOutbox для диспетчера.
+func adaptOutbox(store Outbox) outbox.Outbox {
+	base := outboxAdapter{store: store}
+	if _, ok := store.(fullOutbox); ok {
+		return fullOutboxAdapter{outboxAdapter: base}
+	}
+
+	return base
 }
