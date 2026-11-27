@@ -186,11 +186,8 @@ func (o *PgOutbox) FetchPending(ctx context.Context, limit int) ([]Record, error
 	if limit > 100 {
 		limit = 100
 	}
-	rows, err := o.pool.Query(ctx, `WITH ready AS (
- SELECT id FROM outbox WHERE (status='pending' AND next_attempt_at<=now())
- OR (status='publishing' AND lease_until<=now()) ORDER BY created_at,id LIMIT $1 FOR UPDATE SKIP LOCKED
- ) UPDATE outbox o SET status='publishing',claim_token=gen_random_uuid(),lease_until=now()+interval '30 seconds'
- FROM ready WHERE o.id=ready.id RETURNING o.id,o.topic,o.message_key,o.message_value,o.claim_token,o.lease_until,o.attempts`, limit)
+	query, args := claimPending(limit).Sql()
+	rows, err := o.pool.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("outbox claim: %w", err)
 	}
@@ -209,8 +206,8 @@ func (o *PgOutbox) FetchPending(ctx context.Context, limit int) ([]Record, error
 
 // MarkClaimSent не позволяет старому worker подтвердить новую lease.
 func (o *PgOutbox) MarkClaimSent(ctx context.Context, rec Record) error {
-	tag, err := o.pool.Exec(ctx, `UPDATE outbox SET status='sent',sent_at=now(),claim_token=NULL,lease_until=NULL,attempts=attempts+1
- WHERE id=$1 AND claim_token=$2 AND status='publishing' AND lease_until>now()`, rec.ID, rec.ClaimToken)
+	query, args := markClaimSent(rec).Sql()
+	tag, err := o.pool.Exec(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("outbox mark claim: %w", err)
 	}
@@ -226,10 +223,8 @@ func (o *PgOutbox) MarkSent(ctx context.Context, ids []string) error {
 	if len(ids) == 0 {
 		return nil
 	}
-	tag, err := o.pool.Exec(ctx, `
-		UPDATE outbox
-		SET status = 'sent', sent_at = now(), attempts = attempts + 1
-		WHERE id = ANY($1) AND status='pending' AND claim_token IS NULL`, ids)
+	query, args := markSent(ids).Sql()
+	tag, err := o.pool.Exec(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("outbox mark sent: %w", err)
 	}

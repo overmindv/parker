@@ -21,6 +21,11 @@
   - `outbox` — transactional outbox и retry;
   - `lifecycle` — Runner и graceful shutdown;
   - `health`, `env`, `logging` — базовые инфраструктурные пакеты.
+- Для запросов PgOutbox используй Jet v2.15.0 и таблицы из
+  `internal/adapter/postgres/generated/table`. Генератор и схема модели принадлежат
+  Parker. После миграции выполни `make jet-db`, `make jet-generate` и `make jet-check`
+  с `JET_DATABASE_DSN` из раздела README о PgOutbox. Generated-файлы коммитятся.
+  Сохраняй выбор схемы через `search_path`; SQL-исключения зафиксированы в README.
 - `cmd/parker` передаёт управление в `parker.Main`.
 - Не расширяй публичный API без нужды; каждое добавление проходится через код-ревью и тестами.
 - Добавляя файл в корень, обнови `rootFacadeFiles` в `architecture_test.go`; новый
