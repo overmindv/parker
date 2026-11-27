@@ -8,10 +8,11 @@
   тонкие делегирования. Здесь нет реализации. Публичные типы обязаны оставаться
   в корневом пакете (`architecture_test.go` это проверяет).
 - `internal/<домен>` — реализация по доменам:
-  - `app`-слой пока в корне (`app.go`) — композиция `App`, `Main`, `runServe`;
+  - `app` — выбор подкоманды, сборка HTTP-сервера, жизненный цикл и ресурсы PostgreSQL/Kafka;
   - `cli` — подкоманды `migrate`/`init`;
   - `servicegen` + `servicegen/template` — генерация каркаса сервиса;
-  - `config`-часть (`options.go`, `config.go`) остаётся в корне как публичный контракт;
+  - `config` — значения по умолчанию, загрузка env и валидация настроек;
+  - `convert` — преобразование коллекций между публичными и внутренними типами;
   - `observability` — метрики, трейсинг, OTLP, propagation;
   - `httpkit` — HTTP-сервер и middleware;
   - `requestid` — request_id в контексте;
@@ -20,7 +21,7 @@
   - `outbox` — transactional outbox и retry;
   - `lifecycle` — Runner и graceful shutdown;
   - `health`, `env`, `logging` — базовые инфраструктурные пакеты.
-- `cmd/parker` — CLI: dispatch подкоманд `serve`/`migrate`/`init`/`version`.
+- `cmd/parker` передаёт управление в `parker.Main`.
 - Не расширяй публичный API без нужды; каждое добавление проходится через код-ревью и тестами.
 - Добавляя файл в корень, обнови `rootFacadeFiles` в `architecture_test.go`; новый
   код по умолчанию идёт в `internal/<домен>`.

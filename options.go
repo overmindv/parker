@@ -2,6 +2,9 @@ package parker
 
 import (
 	"time"
+
+	"github.com/overmindv/parker/internal/config"
+	"github.com/overmindv/parker/internal/kafka"
 )
 
 // Options — конфигурация parker: стандартные (инфраструктурные) настройки сервиса.
@@ -45,33 +48,49 @@ type Option func(*Options)
 
 // WithAppName задаёт имя сервиса (иначе env SERVICE_NAME или заглушка).
 func WithAppName(name string) Option {
-	return func(o *Options) { o.ServiceName = name }
+	return func(o *Options) { config.SetAppName(&o.ServiceName, name) }
 }
 
 // DefaultOptions возвращает Options с дефолтными значениями стандартных полей.
-func DefaultOptions() Options {
-	return Options{
-		ServiceName:     "parker",
-		HTTPAddress:     ":8080",
-		Environment:     "local",
-		LogLevel:        "info",
-		ReadTimeout:     10 * time.Second,
-		WriteTimeout:    20 * time.Second,
-		ShutdownTimeout: 10 * time.Second,
-		MigrationsDir:   "migrations",
-		MetricsEnabled:  true,
-		PprofEnabled:    false,
-		Tracing:         TraceOptions{SampleRatio: 0.1},
+func DefaultOptions() Options { return publicOptions(config.DefaultOptions()) }
+
+// Apply применяет список опций к Options.
+func (o Options) Apply(opts []Option) Options { return config.Apply(o, opts) }
+
+func (o Options) settings() config.Options {
+	return config.Options{
+		ServiceName:     o.ServiceName,
+		HTTPAddress:     o.HTTPAddress,
+		Environment:     o.Environment,
+		LogLevel:        o.LogLevel,
+		ReadTimeout:     o.ReadTimeout,
+		WriteTimeout:    o.WriteTimeout,
+		ShutdownTimeout: o.ShutdownTimeout,
+		DatabaseURL:     o.DatabaseURL,
+		MigrationsDir:   o.MigrationsDir,
+		KafkaSecurity:   kafka.Security(o.KafkaSecurity),
+		KafkaBrokers:    o.KafkaBrokers,
+		MetricsEnabled:  o.MetricsEnabled,
+		PprofEnabled:    o.PprofEnabled,
+		Tracing:         config.TraceOptions(o.Tracing),
 	}
 }
 
-// Apply применяет список опций к Options.
-func (o Options) Apply(opts []Option) Options {
-	for _, opt := range opts {
-		if opt != nil {
-			opt(&o)
-		}
+func publicOptions(o config.Options) Options {
+	return Options{
+		ServiceName:     o.ServiceName,
+		HTTPAddress:     o.HTTPAddress,
+		Environment:     o.Environment,
+		LogLevel:        o.LogLevel,
+		ReadTimeout:     o.ReadTimeout,
+		WriteTimeout:    o.WriteTimeout,
+		ShutdownTimeout: o.ShutdownTimeout,
+		DatabaseURL:     o.DatabaseURL,
+		MigrationsDir:   o.MigrationsDir,
+		KafkaSecurity:   KafkaSecurity(o.KafkaSecurity),
+		KafkaBrokers:    o.KafkaBrokers,
+		MetricsEnabled:  o.MetricsEnabled,
+		PprofEnabled:    o.PprofEnabled,
+		Tracing:         TraceOptions(o.Tracing),
 	}
-
-	return o
 }

@@ -4,7 +4,6 @@ import (
 	"log/slog"
 
 	"github.com/overmindv/parker/internal/kafka"
-	"github.com/twmb/franz-go/pkg/kgo"
 )
 
 // KafkaSecurity — общие настройки producer/subscriber. Нулевое значение сохраняет local plaintext.
@@ -16,17 +15,3 @@ func (KafkaSecurity) GoString() string { return kafka.Security{}.GoString() }
 
 func (s KafkaSecurity) String() string       { return kafka.Security(s).String() }
 func (s KafkaSecurity) LogValue() slog.Value { return kafka.Security(s).LogValue() }
-
-func (s KafkaSecurity) validateConfiguration() error {
-	return kafka.ValidateConfiguration(kafka.Security(s))
-}
-
-func kafkaSecurityOptions(settings ...KafkaSecurity) ([]kgo.Opt, error) {
-	return kafka.SecurityOptions(internalSecurity(settings)...)
-}
-
-func loadKafkaSecurity(environment string) (KafkaSecurity, error) {
-	security, err := kafka.LoadSecurity(environment)
-
-	return KafkaSecurity(security), err
-}

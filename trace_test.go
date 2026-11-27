@@ -76,7 +76,7 @@ func TestApp_LoggerForAddsTraceFields(t *testing.T) {
 	t.Parallel()
 
 	var logs bytes.Buffer
-	app := &App{log: bufferLogger(&logs)}
+	app := configuredTestApp(t, DefaultOptions(), bufferLogger(&logs))
 	ctx := observability.ExtractTraceparent(requestid.With(context.Background(), "req-9"), traceFixture)
 	app.LoggerFor(ctx).Info("request")
 	for _, field := range []string{"request_id=req-9", "trace_id=4bf92f3577b34da6a3ce929d0e0e4736", "span_id=00f067aa0ba902b7"} {

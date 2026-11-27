@@ -37,20 +37,18 @@ func TestOpenPool_BadDSN(t *testing.T) {
 func TestApp_PostgresRegistersHealthAndReady(t *testing.T) {
 
 	dsn := testDSN(t)
-	app := newTestApp()
-	app.opts.DatabaseURL = dsn
+	app := newTestApp(t, func(o *Options) { o.DatabaseURL = dsn })
 
 	pool, err := app.Postgres()
 	if err != nil {
 		t.Fatalf("Postgres: %v", err)
 	}
-	defer pool.Close()
-
-	if !app.health.Enabled() {
-		t.Fatal("после Postgres() должен быть зарегистрирован health-чек")
-	}
 	rec := serveRequest(t, app, http.MethodGet, "/ready")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("/ready с поднятой БД: ожидался 200, получили %d", rec.Code)
+	}
+	pool.Close()
+	if rec := serveRequest(t, app, http.MethodGet, "/ready"); rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("зарегистрированный postgres health-чек должен вернуть 503 после закрытия пула, получили %d", rec.Code)
 	}
 }

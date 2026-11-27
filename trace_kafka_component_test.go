@@ -43,13 +43,13 @@ func TestKafkaTraceHTTPToBrokerAndHandler(t *testing.T) {
 	}
 
 	endpoint, collector := newCollectorFixture(t)
-	sender, receiver := tracedApp(t, endpoint, "sender-fixture", 1), tracedApp(t, endpoint, "receiver-fixture", 1)
-	sender.opts.KafkaBrokers, receiver.opts.KafkaBrokers = brokers, brokers
+	withBrokers := func(o *Options) { o.KafkaBrokers = brokers }
+	sender := tracedApp(t, endpoint, "sender-fixture", 1, withBrokers)
+	receiver := tracedApp(t, endpoint, "receiver-fixture", 1, withBrokers)
 	producer, err := sender.NewProducer()
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(sender.closeAll)
 	var attempts atomic.Int32
 	const key, payload = "private-user-key", "private-message-value"
 	subscriber, err := receiver.NewSubscriber("parker-trace-"+requestid.New(), []string{topic}, func(ctx context.Context, gotKey string, value []byte) error {
@@ -68,7 +68,6 @@ func TestKafkaTraceHTTPToBrokerAndHandler(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(receiver.closeAll)
 	result := make(chan error, 1)
 	go func() { result <- subscriber.Run(ctx) }()
 	t.Cleanup(func() {
@@ -88,11 +87,11 @@ func TestKafkaTraceHTTPToBrokerAndHandler(t *testing.T) {
 	in := httptest.NewRequestWithContext(ctx, http.MethodPost, "/queued/private-actor", strings.NewReader("private-code"))
 	in.Header.Set(TraceparentHeader, traceFixture)
 	out := httptest.NewRecorder()
-	sender.server.Handler.ServeHTTP(out, in)
+	sender.state.Handler().ServeHTTP(out, in)
 	if out.Code != http.StatusAccepted {
 		t.Fatal("HTTP request did not publish")
 	}
-	sender.tracing.Shutdown(ctx)
+	sender.state.Tracing().Shutdown(ctx)
 	tick := time.NewTicker(20 * time.Millisecond)
 	defer tick.Stop()
 	for {
